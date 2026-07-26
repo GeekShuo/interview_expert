@@ -1,0 +1,22 @@
+# ===== 密钥与本地配置（切勿提交）=====
+.env
+*.env
+!.env.example
+
+# ===== 虚拟环境与 Python 产物 =====
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ===== 日志 =====
+*.log
+
+# ===== 外部参考项目（第三方代码/二进制，不入库）=====
+references/
+
+# ===== IDE / 系统 =====
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

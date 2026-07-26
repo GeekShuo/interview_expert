@@ -1,0 +1,10 @@
+# 虚拟环境与依赖
+.venv/
+__pycache__/
+*.pyc
+
+# 密钥与本地日志（切勿提交）
+.env
+server.log
+app_out.log
+app_err.log

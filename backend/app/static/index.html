@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 模拟面试 · 算法岗</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/editor/editor.main.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50:'#eef4ff',100:'#dbe6ff',500:'#4f6ef7',600:'#3f5ae0',700:'#3346b8' },
+            ink: { 900:'#0f1222', 800:'#171a2e', 700:'#20243d', 600:'#2c3150' }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-ink-900 text-slate-100 h-screen overflow-hidden">
+  <!-- ============ 启动面板 ============ -->
+  <div id="setup" class="h-screen flex items-center justify-center p-6">
+    <div class="w-full max-w-3xl bg-ink-800/80 backdrop-blur rounded-2xl shadow-2xl border border-white/5 p-8">
+      <div class="flex items-center gap-3 mb-1">
+        <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-brand-500 to-indigo-400 flex items-center justify-center text-2xl">🎯</div>
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight">AI 模拟面试 · 算法岗</h1>
+          <p class="text-slate-400 text-sm">上传简历与 JD，随机匹配领域专家面试官，全真四环节模拟</p>
+        </div>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-5 mt-6">
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-2">📄 简历</label>
+          <label class="flex items-center justify-center gap-2 h-11 rounded-lg border border-dashed border-white/15 bg-ink-700/50 cursor-pointer hover:border-brand-500 transition text-sm text-slate-300 mb-2">
+            <input type="file" id="resumeFile" accept=".pdf,.docx,.txt" class="hidden" />
+            <span id="resumeFileName">点击上传 PDF / DOCX / TXT</span>
+          </label>
+          <textarea id="resumeText" rows="7" placeholder="或直接粘贴简历全文…"
+            class="w-full rounded-lg bg-ink-700/50 border border-white/10 p-3 text-sm resize-none focus:outline-none focus:border-brand-500"></textarea>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-2">💼 目标岗位 JD</label>
+          <textarea id="jdText" rows="11" placeholder="粘贴目标岗位的职位描述（JD）…&#10;例如：算法实习生，负责推荐系统召回排序，要求熟悉机器学习、深度学习…"
+            class="w-full rounded-lg bg-ink-700/50 border border-white/10 p-3 text-sm resize-none focus:outline-none focus:border-brand-500"></textarea>
+        </div>
+      </div>
+
+      <div id="setupHint" class="text-amber-400/80 text-xs mt-4 hidden"></div>
+
+      <button id="startBtn"
+        class="mt-6 w-full h-12 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-500 hover:from-brand-600 hover:to-indigo-600 font-semibold text-white transition shadow-lg shadow-brand-500/20 disabled:opacity-50">
+        开始面试
+      </button>
+      <p class="text-center text-slate-500 text-xs mt-3">面试环节：自我介绍 → 项目深挖 → 算法手撕 → 专业八股 → 面试报告</p>
+    </div>
+  </div>
+
+  <!-- ============ 面试主界面 ============ -->
+  <div id="interview" class="h-screen flex-col hidden">
+    <!-- 顶栏 -->
+    <header class="flex items-center justify-between px-5 py-3 border-b border-white/5 bg-ink-800/60">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-500 to-indigo-400 flex items-center justify-center">🎯</div>
+        <div>
+          <div id="personaName" class="font-semibold text-sm">面试官</div>
+          <div id="personaTitle" class="text-xs text-slate-400">—</div>
+        </div>
+      </div>
+      <!-- 环节进度 -->
+      <div id="stageBar" class="flex items-center gap-1 text-xs"></div>
+      <button id="restartBtn" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">重新开始</button>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden">
+      <!-- 左：对话 -->
+      <section id="chatPane" class="flex-1 flex flex-col min-w-0">
+        <div id="messages" class="flex-1 overflow-y-auto px-5 py-6 space-y-5"></div>
+        <div class="border-t border-white/5 p-4 bg-ink-800/40">
+          <div class="flex gap-2 items-end max-w-3xl mx-auto">
+            <textarea id="userInput" rows="1" placeholder="输入你的回答…（Enter 发送，Shift+Enter 换行）"
+              class="flex-1 rounded-xl bg-ink-700/60 border border-white/10 px-4 py-3 text-sm resize-none focus:outline-none focus:border-brand-500 max-h-40"></textarea>
+            <button id="sendBtn" class="h-11 px-5 rounded-xl bg-brand-500 hover:bg-brand-600 font-medium text-sm transition disabled:opacity-40">发送</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右：代码面板（算法环节显示） -->
+      <section id="codePane" class="w-[46%] border-l border-white/5 flex-col hidden">
+        <div class="flex items-center justify-between px-4 py-2.5 border-b border-white/5 bg-ink-800/60">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-xs font-medium text-brand-100 shrink-0">💻 代码区</span>
+            <span id="problemTitle" class="text-xs text-slate-400 truncate">—</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <select id="langSelect" class="bg-ink-700 text-xs rounded px-2 py-1 border border-white/10 focus:outline-none">
+              <option value="python">Python</option>
+              <option value="cpp">C++</option>
+              <option value="java">Java</option>
+              <option value="javascript">JavaScript</option>
+            </select>
+            <button id="submitCodeBtn" class="text-xs px-3 py-1.5 rounded-lg bg-emerald-500/90 hover:bg-emerald-500 font-medium transition">提交代码</button>
+          </div>
+        </div>
+        <div id="editor" class="flex-1"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============ 报告弹层 ============ -->
+  <div id="reportModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm hidden items-center justify-center p-6 z-50">
+    <div class="bg-ink-800 rounded-2xl border border-white/10 max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+        <h2 class="font-bold text-lg">📋 面试评估报告</h2>
+        <button id="closeReport" class="text-slate-400 hover:text-white text-xl leading-none">×</button>
+      </div>
+      <div id="reportContent" class="markdown overflow-y-auto px-6 py-5 text-sm leading-relaxed"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

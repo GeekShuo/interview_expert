@@ -1,0 +1,44 @@
+"""LLM 客户端封装：OpenAI 兼容接口，支持同步与流式调用。"""
+from typing import Iterator
+from openai import OpenAI
+
+from .config import settings
+
+_client: OpenAI | None = None
+
+
+def get_client() -> OpenAI:
+    global _client
+    if _client is None:
+        _client = OpenAI(
+            base_url=settings.LLM_BASE_URL,
+            api_key=settings.LLM_API_KEY or "sk-placeholder",
+        )
+    return _client
+
+
+def chat(messages: list[dict], temperature: float | None = None) -> str:
+    """一次性返回完整回复。"""
+    resp = get_client().chat.completions.create(
+        model=settings.LLM_MODEL,
+        messages=messages,
+        temperature=settings.LLM_TEMPERATURE if temperature is None else temperature,
+        stream=False,
+    )
+    return resp.choices[0].message.content or ""
+
+
+def chat_stream(messages: list[dict], temperature: float | None = None) -> Iterator[str]:
+    """流式返回增量文本。"""
+    stream = get_client().chat.completions.create(
+        model=settings.LLM_MODEL,
+        messages=messages,
+        temperature=settings.LLM_TEMPERATURE if temperature is None else temperature,
+        stream=True,
+    )
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta and delta.content:
+            yield delta.content
