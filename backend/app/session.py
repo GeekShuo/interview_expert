@@ -8,12 +8,23 @@
 """
 import uuid
 import json
+import time
+import re
 from typing import Iterator, Optional
 
 from . import llm, prompts, personas, parser
+from . import history as history_store
 from .problems import pick_problem
 from .questions import pick_questions
 from .schemas import Stage, STAGE_LABELS, STAGE_ORDER
+
+# 每个环节允许的最大「候选人发言轮次」，超过则强制推进，避免面试卡死
+STAGE_TURN_LIMITS = {
+    Stage.GREETING: 8,
+    Stage.PROJECT: 14,
+    Stage.CODING: 10,
+    Stage.QUIZ: 12,
+}
 
 
 class Session:
@@ -30,6 +41,15 @@ class Session:
         self.quiz_pool: list[str] = pick_questions(self.persona["direction"], n=8)
         self.coding_phase = "present"          # present -> interact
         self.progress: list[dict] = []         # 各阶段完成记录
+        # 进度兜底与历史/评分相关
+        self.stage_turns = 0                     # 当前环节候选人发言轮次计数
+        self.started_at = time.time()
+        self.finished_at: Optional[float] = None
+        self.score: Optional[int] = None        # 面试总分 0-100
+        self.verdict: Optional[str] = None      # 通过 / 待定 / 不通过
+        self.report_text = ""                    # 完整报告 markdown
+        self.abandoned = False
+        self._saved = False                      # 历史是否已落盘
 
     # ---------- system prompt 构造 ----------
     def _system_prompt(self) -> str:
@@ -51,6 +71,8 @@ class Session:
 
     def _build_messages(self, user_message: Optional[str]) -> list[dict]:
         msgs = [{"role": "system", "content": self._system_prompt()}]
+        # 不可覆盖的安全护栏，常驻于每轮对话
+        msgs.append({"role": "system", "content": prompts.GUARDRAIL})
         if self.memo:
             msgs.append({
                 "role": "system",
@@ -93,6 +115,7 @@ class Session:
     def _advance_stage(self):
         idx = STAGE_ORDER.index(self.stage)
         self.progress.append({"stage": self.stage.value, "label": STAGE_LABELS[self.stage]})
+        self.stage_turns = 0
         if idx + 1 < len(STAGE_ORDER):
             self.stage = STAGE_ORDER[idx + 1]
         else:
@@ -134,6 +157,9 @@ class Session:
         if user_message:
             self.history.append({"role": "user", "content": user_message})
             prompt_input = None  # 已写入 history
+            # 计数当前环节的候选人发言轮次（用于进度兜底）
+            if self.stage in STAGE_TURN_LIMITS:
+                self.stage_turns += 1
         else:
             prompt_input = "（面试开始，请你作为面试官开场）"  # 开场触发
 
@@ -144,8 +170,13 @@ class Session:
         if memo:
             self.memo.append(f"[{STAGE_LABELS[self.stage]}] {memo}")
 
-        # 阶段推进
+        # 阶段推进：模型正常发出 next_stage，或轮次超过上限时强制推进
         action = (control or {}).get("action", "continue")
+        if action != "next_stage" and self.stage in STAGE_TURN_LIMITS:
+            limit = STAGE_TURN_LIMITS[self.stage]
+            if self.stage_turns >= limit:
+                action = "next_stage"
+
         if action == "next_stage" and self.stage != Stage.FINISHED:
             self._advance_stage()
             yield {"type": "stage", "stage": self.stage.value,
@@ -184,10 +215,69 @@ class Session:
             self.persona, self.resume, self.jd, transcript, memo_text
         )
         yield {"type": "report_start"}
+        report_text = ""
         for delta in llm.chat_stream([{"role": "user", "content": prompt}], temperature=0.4):
+            report_text += delta
             yield {"type": "token", "text": delta, "channel": "report"}
+        self.report_text = report_text
+        self.score, self.verdict = self._parse_score(report_text)
         self.stage = Stage.FINISHED
+        self.finished_at = time.time()
+        self._save_history()
         yield {"type": "stage", "stage": self.stage.value, "label": STAGE_LABELS[self.stage]}
+
+    # ---------- 评分解析与历史落盘 ----------
+    @staticmethod
+    def _parse_score(text: str):
+        total = None
+        verdict = None
+        m = re.search(r"总分[：:]\s*(\d{1,3})\s*/\s*100", text)
+        if m:
+            try:
+                total = int(m.group(1))
+            except ValueError:
+                total = None
+        v = re.search(r"推荐结论[：:]\s*(通过|待定|不通过)", text)
+        if not v:
+            v = re.search(r"(通过|待定|不通过)", text)
+        if v:
+            verdict = v.group(1)
+        return total, verdict
+
+    def _build_history_record(self) -> dict:
+        transcript = "\n".join(
+            f"{'候选人' if m['role'] == 'user' else '面试官'}：{m['content']}"
+            for m in self.history
+        )
+        return {
+            "id": self.id,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at or time.time(),
+            "persona_name": self.persona.get("name"),
+            "persona_title": self.persona.get("title"),
+            "jd_title": self.jd.get("title"),
+            "score": self.score,
+            "verdict": self.verdict,
+            "abandoned": self.abandoned,
+            "report": self.report_text,
+            "transcript": transcript,
+        }
+
+    def _save_history(self, abandoned: bool = False):
+        """落盘到历史记录（已完成只存一次；放弃时无论是否已存都覆盖记录）。"""
+        if self._saved and not abandoned:
+            return
+        rec = self._build_history_record()
+        rec["abandoned"] = abandoned
+        history_store.save_record(rec)
+        self._saved = True
+
+    def abandon(self):
+        """面试中途放弃：标记为未完成并保存到历史（仅当尚未生成报告）。"""
+        if self.stage == Stage.FINISHED:
+            return
+        self.abandoned = True
+        self._save_history(abandoned=True)
 
 
 # ---------- 内存会话存储 ----------

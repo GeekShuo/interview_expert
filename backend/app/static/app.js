@@ -120,6 +120,9 @@ async function startInterview() {
   const fd = new FormData();
   fd.append("resume_text", resumeText);
   fd.append("jd_text", jdText);
+  // 若之前有进行中的会话，作为 previous 传回，后端会将其标记为「未完成」并落盘
+  const prev = sessionStorage.getItem("lastSessionId");
+  if (prev) fd.append("previous_session_id", prev);
 
   try {
     const res = await fetch("/api/start", { method: "POST", body: fd });
@@ -127,6 +130,7 @@ async function startInterview() {
     state.sessionId = data.session_id;
     state.stages = data.stages;
     state.currentStage = data.stage;
+    sessionStorage.setItem("lastSessionId", data.session_id);
 
     if (!data.llm_ready) {
       showHint("⚠️ 后端未配置有效的 LLM API Key，面试官将无法回复。请在 backend/.env 中填写。");
@@ -160,7 +164,11 @@ function showHint(msg) {
 // ============ 环节进度条 ============
 function renderStageBar() {
   const bar = $("stageBar");
-  const curIdx = state.stages.findIndex((s) => s.key === state.currentStage);
+  // finished 视为全部完成
+  const curIdx =
+    state.currentStage === "finished"
+      ? state.stages.length
+      : state.stages.findIndex((s) => s.key === state.currentStage);
   bar.innerHTML = state.stages
     .map((s, i) => {
       const done = i < curIdx;
@@ -183,9 +191,21 @@ function setStage(stageKey) {
   // 进入/离开算法环节切换代码面板
   if (stageKey === "coding") {
     showCodePane();
+    focusEditor();
+    // 进入算法环节：引导用编辑器写代码，避免直接在聊天框贴代码
+    $("userInput").placeholder = "在此与面试官交流思路（代码请写在右侧编辑器，写完点「提交代码」）";
+    $("expandEditorBtn").classList.remove("hidden");
+    $("submitCodeBtn").classList.add("pulse-attn");
   } else {
     $("codePane").classList.add("hidden");
     $("codePane").classList.remove("flex");
+    $("userInput").placeholder = "输入你的回答…（Enter 发送，Shift+Enter 换行）";
+    $("expandEditorBtn").classList.add("hidden");
+    $("expandEditorBtn").textContent = "⤢ 展开";
+    $("chatPane").classList.remove("hidden");
+    $("codePane").classList.remove("flex-1");
+    $("codePane").classList.add("w-[46%]");
+    $("submitCodeBtn").classList.remove("pulse-attn");
   }
   if (stageKey === "report" || stageKey === "finished") {
     openReport();
@@ -217,6 +237,15 @@ function addSystemNote(text) {
   d.textContent = "— " + text + " —";
   $("messages").appendChild(d);
   scrollBottom();
+}
+
+// 渲染用户消息：若内容疑似代码，则包裹为代码块，避免聊天框里渲染错乱
+function renderUserMessage(text) {
+  const looksLikeCode =
+    /[\n;{}]/.test(text) &&
+    /(def |class |void\s+main|public |private |import |function |=>|console\.|print\(|return |#include|using )/.test(text);
+  const html = looksLikeCode ? marked.parse("```\n" + text + "\n```") : marked.parse(text);
+  addMessage("user").innerHTML = html;
 }
 
 function scrollBottom() {
@@ -295,7 +324,7 @@ async function sendMessage() {
   voiceOut.cancel(); // 停掉残留朗读
   $("userInput").value = "";
   autoGrow();
-  addMessage("user").innerHTML = marked.parse(text);
+  renderUserMessage(text);
 
   const inner = addMessage("assistant");
   inner.parentElement.classList.add("cursor-blink");
@@ -344,8 +373,33 @@ function showCodePane() {
         automaticLayout: true,
         scrollBeyondLastLine: false,
       });
+      focusEditor();
     });
   }
+}
+
+// 聚焦代码编辑器（创建完成后）
+function focusEditor() {
+  if (state.editor) {
+    try { state.editor.focus(); } catch (e) {}
+  }
+}
+
+// 展开/收起代码编辑器（全屏写代码，隐藏对话区）
+function toggleEditorExpand() {
+  const expanded = $("chatPane").classList.contains("hidden");
+  if (expanded) {
+    $("chatPane").classList.remove("hidden");
+    $("codePane").classList.remove("flex-1");
+    $("codePane").classList.add("w-[46%]");
+    $("expandEditorBtn").textContent = "⤢ 展开";
+  } else {
+    $("chatPane").classList.add("hidden");
+    $("codePane").classList.remove("w-[46%]");
+    $("codePane").classList.add("flex-1");
+    $("expandEditorBtn").textContent = "⤡ 收起";
+  }
+  if (state.editor) setTimeout(() => state.editor.layout(), 60);
 }
 
 $("langSelect").addEventListener("change", (e) => {
@@ -398,13 +452,51 @@ let reportAcc = "";
 function handleReportToken(text, start) {
   if (start) {
     reportAcc = "";
+    renderReportScore(""); // 先隐藏分数条
     openReport();
     return;
   }
   reportAcc += text;
   $("reportContent").innerHTML = marked.parse(reportAcc);
+  renderReportScore(reportAcc);
   const rc = $("reportContent");
   rc.scrollTop = rc.scrollHeight;
+}
+
+// 从报告文本中解析总分与结论
+function parseScore(text) {
+  const m = text.match(/总分[：:]\s*(\d{1,3})\s*\/\s*100/);
+  const total = m ? parseInt(m[1], 10) : null;
+  const v = text.match(/推荐结论[：:]\s*(通过|待定|不通过)/) || text.match(/(通过|待定|不通过)/);
+  const verdict = v ? v[1] : null;
+  return { total, verdict };
+}
+
+function scoreColor(total, verdict) {
+  if (verdict === "不通过") return "bg-red-500/20 text-red-300";
+  if (verdict === "待定") return "bg-amber-500/20 text-amber-300";
+  if (verdict === "通过") return "bg-emerald-500/20 text-emerald-300";
+  if (total != null) {
+    if (total >= 80) return "bg-emerald-500/20 text-emerald-300";
+    if (total >= 60) return "bg-amber-500/20 text-amber-300";
+  }
+  return "bg-white/10 text-slate-300";
+}
+
+// 在报告弹窗顶栏展示总分
+function renderReportScore(text) {
+  const { total, verdict } = parseScore(text);
+  const bar = $("reportScoreBar");
+  if (total == null) {
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.remove("hidden");
+  const circle = $("scoreCircle");
+  circle.textContent = total;
+  circle.className =
+    "w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-bold " + scoreColor(total, verdict);
+  $("scoreVerdict").textContent = verdict ? "推荐：" + verdict : "";
 }
 
 function openReport() {
@@ -417,3 +509,97 @@ $("closeReport").addEventListener("click", () => {
 });
 
 $("restartBtn").addEventListener("click", () => location.reload());
+
+// ============ 历史面试 ============
+function openHistory() {
+  const modal = $("historyModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  loadHistory();
+}
+function closeHistory() {
+  const modal = $("historyModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+$("historyBtn").addEventListener("click", openHistory);
+$("historyBtnSetup").addEventListener("click", openHistory);
+$("closeHistory").addEventListener("click", closeHistory);
+
+$("expandEditorBtn").addEventListener("click", toggleEditorExpand);
+
+function fmtDate(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function loadHistory() {
+  const list = $("historyList");
+  list.innerHTML = '<div class="text-slate-500 text-sm">加载中…</div>';
+  try {
+    const res = await fetch("/api/history");
+    const data = await res.json();
+    const records = data.records || [];
+    if (records.length === 0) {
+      list.innerHTML = '<div class="text-slate-500 text-sm">暂无历史面试记录。完成一次面试后会出现在这里。</div>';
+      return;
+    }
+    list.innerHTML = records.map((r) => {
+      const badge = r.abandoned
+        ? '<span class="text-xs px-2 py-0.5 rounded-full bg-white/10 text-slate-400">未完成</span>'
+        : `<span class="text-xs px-2 py-0.5 rounded-full ${scoreColor(r.score, r.verdict)}">${r.score != null ? r.score + "分" : "—"}${r.verdict ? " · " + r.verdict : ""}</span>`;
+      return `<div class="rounded-xl border border-white/5 bg-ink-700/40 p-4 flex items-center justify-between gap-3">
+        <div class="min-w-0">
+          <div class="font-medium text-sm truncate">${r.persona_name || "面试官"} · ${r.persona_title || ""}</div>
+          <div class="text-xs text-slate-400 truncate">${r.jd_title || "算法岗"}　|　${fmtDate(r.finished_at)}</div>
+        </div>
+        ${badge}
+        <div class="flex items-center gap-2 shrink-0">
+          <button class="hist-view text-xs px-3 py-1.5 rounded-lg bg-brand-500/90 hover:bg-brand-600 font-medium" data-id="${r.id}">查看</button>
+          <button class="hist-del text-xs px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-red-400 hover:text-red-300" data-id="${r.id}">删除</button>
+        </div>
+      </div>`;
+    }).join("");
+    list.querySelectorAll(".hist-view").forEach((b) =>
+      b.addEventListener("click", () => viewHistoryDetail(b.dataset.id))
+    );
+    list.querySelectorAll(".hist-del").forEach((b) =>
+      b.addEventListener("click", () => deleteHistory(b.dataset.id))
+    );
+  } catch (e) {
+    list.innerHTML = '<div class="text-red-400 text-sm">加载失败：' + e.message + "</div>";
+  }
+}
+
+async function viewHistoryDetail(id) {
+  try {
+    const res = await fetch("/api/history/" + id);
+    const rec = await res.json();
+    renderReportScore(rec.report || "");
+    const transcriptHtml = rec.transcript
+      ? `<details class="mt-4 pt-3 border-t border-white/5"><summary class="cursor-pointer text-slate-400 text-xs">查看完整对话记录</summary><pre class="mt-2 whitespace-pre-wrap text-xs text-slate-300 bg-ink-900/50 rounded-lg p-3">${escapeHtml(rec.transcript)}</pre></details>`
+      : "";
+    $("reportContent").innerHTML = marked.parse(rec.report || "（无报告）") + transcriptHtml;
+    $("reportContent").scrollTop = 0;
+    closeHistory();
+    openReport();
+  } catch (e) {
+    alert("加载详情失败：" + e.message);
+  }
+}
+
+async function deleteHistory(id) {
+  if (!confirm("确定删除这条历史记录？")) return;
+  try {
+    await fetch("/api/history/" + id, { method: "DELETE" });
+    loadHistory();
+  } catch (e) {
+    alert("删除失败：" + e.message);
+  }
+}
+
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}

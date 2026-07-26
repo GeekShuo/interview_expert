@@ -20,3 +20,6 @@ references/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# ===== 面试历史记录（本地落盘，含个人数据，不入库）=====
+backend/data/

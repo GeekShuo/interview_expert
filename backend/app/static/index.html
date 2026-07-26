@@ -56,6 +56,10 @@
         class="mt-6 w-full h-12 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-500 hover:from-brand-600 hover:to-indigo-600 font-semibold text-white transition shadow-lg shadow-brand-500/20 disabled:opacity-50">
         开始面试
       </button>
+      <button id="historyBtnSetup"
+        class="mt-3 w-full h-10 rounded-xl border border-white/10 hover:border-brand-500 text-slate-300 text-sm transition">
+        📚 查看历史面试
+      </button>
       <p class="text-center text-slate-500 text-xs mt-3">面试环节：自我介绍 → 项目深挖 → 算法手撕 → 专业八股 → 面试报告</p>
     </div>
   </div>
@@ -74,6 +78,7 @@
       <!-- 环节进度 -->
       <div id="stageBar" class="flex items-center gap-1 text-xs"></div>
       <div class="flex items-center gap-2">
+        <button id="historyBtn" class="text-xs text-slate-300 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">📚 历史</button>
         <label id="voiceModeLabel" class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-brand-500 transition" title="开启后：面试官自动朗读，读完自动开麦听你回答，静音自动发送">
           <input type="checkbox" id="voiceModeToggle" class="accent-brand-500" />
           <span>🎙️ 语音模式</span>
@@ -106,6 +111,8 @@
             <span id="problemTitle" class="text-xs text-slate-400 truncate">—</span>
           </div>
           <div class="flex items-center gap-2">
+            <button id="expandEditorBtn" title="展开/收起代码编辑器（全屏写代码）"
+              class="text-xs px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-brand-500 transition">⤢ 展开</button>
             <select id="langSelect" class="bg-ink-700 text-xs rounded px-2 py-1 border border-white/10 focus:outline-none">
               <option value="python">Python</option>
               <option value="cpp">C++</option>
@@ -127,7 +134,25 @@
         <h2 class="font-bold text-lg">📋 面试评估报告</h2>
         <button id="closeReport" class="text-slate-400 hover:text-white text-xl leading-none">×</button>
       </div>
+      <div id="reportScoreBar" class="hidden px-6 py-4 border-b border-white/5 bg-ink-700/40 flex items-center gap-4">
+        <div id="scoreCircle" class="w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-bold">—</div>
+        <div>
+          <div class="text-xs text-slate-400">面试总分</div>
+          <div id="scoreVerdict" class="font-semibold text-base"></div>
+        </div>
+      </div>
       <div id="reportContent" class="markdown overflow-y-auto px-6 py-5 text-sm leading-relaxed"></div>
+    </div>
+  </div>
+
+  <!-- ============ 历史面试弹层 ============ -->
+  <div id="historyModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm hidden items-center justify-center p-6 z-50">
+    <div class="bg-ink-800 rounded-2xl border border-white/10 max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+        <h2 class="font-bold text-lg">📚 历史面试</h2>
+        <button id="closeHistory" class="text-slate-400 hover:text-white text-xl leading-none">×</button>
+      </div>
+      <div id="historyList" class="overflow-y-auto px-6 py-5 space-y-3"></div>
     </div>
   </div>
 

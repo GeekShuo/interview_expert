@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import session as sess
 from . import parser
+from . import history as history_store
 from .config import settings
 from .schemas import ChatRequest, CodeSubmitRequest, STAGE_LABELS
 from .schemas import Stage
@@ -38,8 +39,16 @@ async def upload_resume(file: UploadFile = File(...)):
 async def start_interview(
     resume_text: str = Form(""),
     jd_text: str = Form(""),
+    previous_session_id: str = Form(""),
 ):
-    """创建面试会话，返回会话信息（面试官、岗位等）。"""
+    """创建面试会话，返回会话信息（面试官、岗位等）。
+
+    previous_session_id：若传入且对应会话尚未完成，则将其标记为「未完成」并写入历史。
+    """
+    if previous_session_id:
+        prev = sess.get_session(previous_session_id)
+        if prev is not None and prev.stage != Stage.FINISHED:
+            prev.abandon()
     s = sess.create_session(resume_text, jd_text)
     return {
         "session_id": s.id,
@@ -120,6 +129,31 @@ def state(session_id: str):
         "progress": s.progress,
         "current_problem": s.current_problem,
     }
+
+
+# ---------- 历史面试 ----------
+@app.get("/api/history")
+def list_history():
+    """返回历史面试摘要列表（最新在前）。"""
+    return {"records": history_store.list_records()}
+
+
+@app.get("/api/history/{record_id}")
+def get_history(record_id: str):
+    """返回某次面试的完整记录（含报告与转写）。"""
+    rec = history_store.get_record(record_id)
+    if not rec:
+        raise HTTPException(404, "记录不存在")
+    return rec
+
+
+@app.delete("/api/history/{record_id}")
+def delete_history(record_id: str):
+    """删除一条历史记录。"""
+    ok = history_store.delete_record(record_id)
+    if not ok:
+        raise HTTPException(404, "记录不存在")
+    return {"ok": True}
 
 
 # ---------- 静态前端 ----------
