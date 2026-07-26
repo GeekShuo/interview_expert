@@ -9,6 +9,85 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+// ============ 语音（ASR + TTS）============
+const voiceOut = new VoiceOutput();
+const voiceIn = new VoiceInput();
+let voiceMode = false; // 语音模式：自动朗读 + 读完开麦 + 静音自动发送
+
+// 麦克风识别实时更新输入框
+voiceIn.onUpdate = (finalText, interim) => {
+  $("userInput").value = finalText + interim;
+  autoGrow();
+};
+voiceIn.onStart = () => setMicUI(true);
+voiceIn.onStop = () => setMicUI(false);
+// 静音超时自动停止并发送
+voiceIn.onAutoStop = (txt) => {
+  $("userInput").value = txt;
+  autoGrow();
+  sendMessage();
+};
+
+function setMicUI(active) {
+  const btn = $("micBtn");
+  const status = $("voiceStatus");
+  if (active) {
+    btn.classList.add("mic-active");
+    btn.textContent = "⏹";
+    btn.title = "正在聆听…点击停止并发送";
+    status.textContent = "🎧 正在聆听，说完停顿一下会自动发送…";
+    status.classList.remove("hidden");
+  } else {
+    btn.classList.remove("mic-active");
+    btn.textContent = "🎤";
+    btn.title = "点击说话（再次点击停止并发送）";
+    status.classList.add("hidden");
+  }
+}
+
+// 语音模式开关
+$("voiceModeToggle").addEventListener("change", (e) => {
+  voiceMode = e.target.checked;
+  voiceOut.enabled = true;
+  if (!voiceIn.supported && voiceMode) {
+    showToast("当前浏览器不支持语音识别，请使用 Chrome 或 Edge");
+  }
+  if (!voiceMode) {
+    voiceOut.cancel();
+    voiceIn.stop();
+  }
+});
+
+// 麦克风按钮：手动开/关（关闭时若已识别到内容则发送）
+$("micBtn").addEventListener("click", () => {
+  if (!voiceIn.supported) {
+    showToast("当前浏览器不支持语音识别，请使用 Chrome 或 Edge");
+    return;
+  }
+  if (voiceIn.listening) {
+    const txt = voiceIn.finalText.trim() || $("userInput").value.trim();
+    voiceIn.stop();
+    if (txt) { $("userInput").value = txt; sendMessage(); }
+  } else {
+    voiceOut.cancel(); // 说话前先停掉朗读，避免回声
+    voiceIn.start();
+  }
+});
+
+// 语音模式下：面试官回复读完后自动开麦听用户
+function startListeningTurn() {
+  if (!voiceMode || !voiceIn.supported) return;
+  if (state.streaming || voiceIn.listening) return;
+  voiceIn.start();
+}
+
+function showToast(msg) {
+  const el = $("voiceStatus");
+  el.textContent = "⚠️ " + msg;
+  el.classList.remove("hidden");
+  setTimeout(() => el.classList.add("hidden"), 4000);
+}
+
 // ============ 启动面板逻辑 ============
 $("resumeFile").addEventListener("change", async (e) => {
   const file = e.target.files[0];
@@ -182,11 +261,13 @@ async function streamOpening() {
   const inner = addMessage("assistant");
   inner.parentElement.classList.add("cursor-blink");
   let acc = "";
+  const spk = makeSpeaker(voiceOut);
   state.streaming = true;
   await streamSSE("/api/opening?session_id=" + state.sessionId, { method: "GET" }, {
     onToken: (t) => {
       acc += t;
       inner.innerHTML = marked.parse(acc);
+      if (voiceMode) spk.feed(acc);
       scrollBottom();
     },
     onStage: (ev) => setStage(ev.stage),
@@ -195,6 +276,7 @@ async function streamOpening() {
   });
   inner.parentElement.classList.remove("cursor-blink");
   state.streaming = false;
+  if (voiceMode) spk.finish(startListeningTurn);
 }
 
 // 用户发送
@@ -209,6 +291,8 @@ $("userInput").addEventListener("keydown", (e) => {
 async function sendMessage() {
   const text = $("userInput").value.trim();
   if (!text || state.streaming) return;
+  if (voiceIn.listening) voiceIn.stop();
+  voiceOut.cancel(); // 停掉残留朗读
   $("userInput").value = "";
   autoGrow();
   addMessage("user").innerHTML = marked.parse(text);
@@ -216,6 +300,7 @@ async function sendMessage() {
   const inner = addMessage("assistant");
   inner.parentElement.classList.add("cursor-blink");
   let acc = "";
+  const spk = makeSpeaker(voiceOut);
   state.streaming = true;
   $("sendBtn").disabled = true;
   await streamSSE("/api/chat", {
@@ -223,7 +308,7 @@ async function sendMessage() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: state.sessionId, message: text }),
   }, {
-    onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); scrollBottom(); },
+    onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
     onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
     onProblem: (p) => renderProblem(p),
     onReport: handleReportToken,
@@ -231,6 +316,7 @@ async function sendMessage() {
   inner.parentElement.classList.remove("cursor-blink");
   state.streaming = false;
   $("sendBtn").disabled = false;
+  if (voiceMode) spk.finish(startListeningTurn);
 }
 
 // 自适应输入框高度
@@ -288,19 +374,23 @@ $("submitCodeBtn").addEventListener("click", async () => {
   const inner = addMessage("assistant");
   inner.parentElement.classList.add("cursor-blink");
   let acc = "";
+  const spk = makeSpeaker(voiceOut);
+  voiceOut.cancel();
   state.streaming = true;
   await streamSSE("/api/submit_code", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: state.sessionId, code, language: lang }),
   }, {
-    onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); scrollBottom(); },
+    onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
     onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
     onProblem: (p) => renderProblem(p),
     onReport: handleReportToken,
   });
   inner.parentElement.classList.remove("cursor-blink");
   state.streaming = false;
+  // 若离开算法环节回到对话，则读完开麦；否则仅朗读
+  if (voiceMode) spk.finish(state.currentStage === "coding" ? null : startListeningTurn);
 });
 
 // ============ 报告 ============

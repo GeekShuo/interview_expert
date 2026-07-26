@@ -73,7 +73,13 @@
       </div>
       <!-- 环节进度 -->
       <div id="stageBar" class="flex items-center gap-1 text-xs"></div>
-      <button id="restartBtn" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">重新开始</button>
+      <div class="flex items-center gap-2">
+        <label id="voiceModeLabel" class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-brand-500 transition" title="开启后：面试官自动朗读，读完自动开麦听你回答，静音自动发送">
+          <input type="checkbox" id="voiceModeToggle" class="accent-brand-500" />
+          <span>🎙️ 语音模式</span>
+        </label>
+        <button id="restartBtn" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">重新开始</button>
+      </div>
     </header>
 
     <div class="flex-1 flex overflow-hidden">
@@ -82,10 +88,13 @@
         <div id="messages" class="flex-1 overflow-y-auto px-5 py-6 space-y-5"></div>
         <div class="border-t border-white/5 p-4 bg-ink-800/40">
           <div class="flex gap-2 items-end max-w-3xl mx-auto">
+            <button id="micBtn" title="点击说话（再次点击停止并发送）"
+              class="h-11 w-11 shrink-0 rounded-xl bg-ink-700/60 border border-white/10 hover:border-brand-500 flex items-center justify-center text-lg transition">🎤</button>
             <textarea id="userInput" rows="1" placeholder="输入你的回答…（Enter 发送，Shift+Enter 换行）"
               class="flex-1 rounded-xl bg-ink-700/60 border border-white/10 px-4 py-3 text-sm resize-none focus:outline-none focus:border-brand-500 max-h-40"></textarea>
             <button id="sendBtn" class="h-11 px-5 rounded-xl bg-brand-500 hover:bg-brand-600 font-medium text-sm transition disabled:opacity-40">发送</button>
           </div>
+          <div id="voiceStatus" class="max-w-3xl mx-auto mt-1.5 text-xs text-slate-500 hidden"></div>
         </div>
       </section>
 
@@ -123,6 +132,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+  <script src="/static/voice.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
