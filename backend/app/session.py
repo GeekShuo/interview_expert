@@ -133,18 +133,21 @@ class Session:
         keep = len(prompts.SEP_MEMO) + 2  # 尾部保护，避免分隔符被截断误发
         for delta in llm.chat_stream(messages):
             full += delta
-            cut = full.find(prompts.SEP_MEMO)
-            if cut == -1:
-                safe_to = max(sent, len(full) - keep)
-                if safe_to > sent:
-                    yield {"type": "token", "text": full[sent:safe_to]}
-                    sent = safe_to
-            else:
-                if cut > sent:
-                    yield {"type": "token", "text": full[sent:cut]}
-                sent = cut
-                found_sep = True
-                break
+            if not found_sep:
+                cut = full.find(prompts.SEP_MEMO)
+                if cut == -1:
+                    safe_to = max(sent, len(full) - keep)
+                    if safe_to > sent:
+                        yield {"type": "token", "text": full[sent:safe_to]}
+                        sent = safe_to
+                else:
+                    if cut > sent:
+                        yield {"type": "token", "text": full[sent:cut]}
+                    sent = cut
+                    found_sep = True
+                    # 不 break：继续消费后续 token，确保 ###MEMO### 之后的
+                    # memo 与 ###CONTROL### 控制信号被完整读入 full，避免 next_stage 丢失
+            # found_sep 后只累加 full，不再向用户发送可见 token
         # 流式正常结束时，补发尾部保护预留的最后一段可见内容；
         # 仅当未遇到分隔符时才补发，避免把隐藏的 memo/control 暴露给用户。
         if not found_sep and sent < len(full):
@@ -170,21 +173,28 @@ class Session:
         if memo:
             self.memo.append(f"[{STAGE_LABELS[self.stage]}] {memo}")
 
-        # 阶段推进：模型正常发出 next_stage，或轮次超过上限时强制推进
-        action = (control or {}).get("action", "continue")
-        if action != "next_stage" and self.stage in STAGE_TURN_LIMITS:
-            limit = STAGE_TURN_LIMITS[self.stage]
-            if self.stage_turns >= limit:
-                action = "next_stage"
-
-        if action == "next_stage" and self.stage != Stage.FINISHED:
+        # 阶段推进：每轮最多推进一个阶段，避免模型一次回复发多个 next_stage
+        # 把中间环节整个跳过（每个阶段都应有一次真实交互）；同时支持轮次兜底强制推进。
+        advanced_this_turn = False
+        while True:
+            want_next = (control or {}).get("action", "continue") == "next_stage"
+            if not want_next and self.stage in STAGE_TURN_LIMITS:
+                # 轮次兜底：当前阶段候选人发言次数达到上限则强制推进
+                if self.stage_turns >= STAGE_TURN_LIMITS[self.stage]:
+                    want_next = True
+            if not want_next or self.stage == Stage.FINISHED:
+                break
+            # 每个阶段只允许推进一次，下一次推进留待下一轮对话
             self._advance_stage()
             yield {"type": "stage", "stage": self.stage.value,
                    "label": STAGE_LABELS.get(self.stage, "")}
+            advanced_this_turn = True
             if self.stage == Stage.CODING:
                 yield from self._auto_present_problem()
             elif self.stage == Stage.REPORT:
                 yield from self._generate_report()
+            # 只推进一次：跳出循环，剩余 next_stage 留待后续轮次
+            break
 
         yield {"type": "done"}
 
@@ -206,6 +216,9 @@ class Session:
         }}
 
     def _generate_report(self) -> Iterator[dict]:
+        # 防止重复生成报告（兜底强制推进可能再次触发）
+        if self.stage == Stage.FINISHED:
+            return
         transcript = "\n".join(
             f"{'候选人' if m['role'] == 'user' else '面试官'}：{m['content']}"
             for m in self.history
