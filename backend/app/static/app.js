@@ -739,30 +739,35 @@ async function loadHistory() {
 function renderHistoryStats(records) {
   const box = $("historyStats");
   const done = records.filter((r) => !r.abandoned && r.score != null).reverse(); // 按时间正序
-  if (done.length < 2) { box.classList.add("hidden"); return; }
+  if (done.length < 1) { box.classList.add("hidden"); return; } // 首场即展示画像
   box.classList.remove("hidden");
 
   const scores = done.map((r) => r.score);
   const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
   const best = Math.max(...scores);
   const delta = scores[scores.length - 1] - scores[0];
-  const deltaHtml = delta === 0 ? "" : delta > 0
+  const deltaHtml = done.length < 2 || delta === 0 ? "—" : delta > 0
     ? `<span class="text-emerald-300">↑${delta}</span>`
     : `<span class="text-red-300">↓${-delta}</span>`;
 
-  // 分数趋势折线（SVG sparkline）
-  const W = 240, H = 44, P = 4;
-  const lo = Math.min(...scores), hi = Math.max(...scores);
-  const span = hi - lo || 1;
-  const pts = scores.map((s, i) => {
-    const x = P + (i * (W - 2 * P)) / Math.max(scores.length - 1, 1);
-    const y = H - P - ((s - lo) * (H - 2 * P)) / span;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
-  const spark = `<svg width="${W}" height="${H}" class="block">
-    <polyline points="${pts.join(" ")}" fill="none" stroke="#4f6ef7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    ${pts.map((p) => `<circle cx="${p.split(",")[0]}" cy="${p.split(",")[1]}" r="2.5" fill="#8ea2ff"/>`).join("")}
-  </svg>`;
+  // 分数趋势折线（SVG sparkline，≥2 场才有趋势）
+  let spark;
+  if (done.length >= 2) {
+    const W = 240, H = 44, P = 4;
+    const lo = Math.min(...scores), hi = Math.max(...scores);
+    const span = hi - lo || 1;
+    const pts = scores.map((s, i) => {
+      const x = P + (i * (W - 2 * P)) / Math.max(scores.length - 1, 1);
+      const y = H - P - ((s - lo) * (H - 2 * P)) / span;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+    spark = `<svg width="${W}" height="${H}" class="block">
+      <polyline points="${pts.join(" ")}" fill="none" stroke="#4f6ef7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      ${pts.map((p) => `<circle cx="${p.split(",")[0]}" cy="${p.split(",")[1]}" r="2.5" fill="#8ea2ff"/>`).join("")}
+    </svg>`;
+  } else {
+    spark = `<div class="text-xs text-slate-500 h-[44px] flex items-center">再完成 1 场即可看到分数趋势</div>`;
+  }
 
   // 各维度均分（来自报告分项评分）
   const dimSum = {}, dimCnt = {};

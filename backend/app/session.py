@@ -8,6 +8,7 @@
 """
 import uuid
 import json
+import os
 import time
 import re
 import threading
@@ -18,6 +19,9 @@ from . import history as history_store
 from .problems import pick_problem
 from .questions import pick_questions
 from .schemas import Stage, STAGE_LABELS, STAGE_ORDER
+
+# 进行中会话的落盘目录：服务重启后仍可恢复未完成的面试
+LIVE_DIR = os.path.join(history_store.DATA_DIR, "live_sessions")
 
 # 每个环节允许的最大「候选人发言轮次」，超过则强制推进，避免面试卡死
 STAGE_TURN_LIMITS = {
@@ -236,6 +240,7 @@ class Session:
             # 只推进一次：跳出循环，剩余 next_stage 留待后续轮次
             break
 
+        self._persist_live()  # 每轮结束落盘，服务重启后可恢复
         yield {"type": "done"}
 
     def _auto_present_problem(self) -> Iterator[dict]:
@@ -286,6 +291,7 @@ class Session:
         self.stage = Stage.FINISHED
         self.finished_at = time.time()
         self._save_history()
+        self._delete_live()  # 已完成：不再需要恢复快照
         yield {"type": "stage", "stage": self.stage.value, "label": STAGE_LABELS[self.stage]}
 
     # ---------- 评分解析与历史落盘 ----------
@@ -371,17 +377,81 @@ class Session:
             return
         self.abandoned = True
         self._save_history(abandoned=True)
+        self._delete_live()
+
+    # ---------- 进行中会话的快照持久化（服务重启后可恢复） ----------
+    _SNAP_FIELDS = [
+        "id", "jd", "resume", "persona", "history", "memo", "used_problem_ids",
+        "current_problem", "quiz_pool", "coding_phase", "progress", "stage_turns",
+        "started_at", "finished_at", "score", "verdict", "report_text",
+        "abandoned", "judge_results", "dimensions",
+    ]
+
+    def snapshot(self) -> dict:
+        data = {k: getattr(self, k) for k in self._SNAP_FIELDS}
+        data["stage"] = self.stage.value
+        return data
+
+    @classmethod
+    def from_snapshot(cls, data: dict) -> "Session":
+        s = cls.__new__(cls)
+        for k in cls._SNAP_FIELDS:
+            setattr(s, k, data.get(k))
+        s.stage = Stage(data["stage"])
+        s._saved = False
+        s._lock = threading.Lock()
+        s._report_done = False
+        return s
+
+    def _live_path(self) -> str:
+        return os.path.join(LIVE_DIR, f"{self.id}.json")
+
+    def _persist_live(self):
+        """原子落盘进行中会话；已结束的不落。失败不影响主流程。"""
+        if self.stage == Stage.FINISHED:
+            return
+        try:
+            os.makedirs(LIVE_DIR, exist_ok=True)
+            tmp = self._live_path() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.snapshot(), f, ensure_ascii=False)
+            os.replace(tmp, self._live_path())
+        except OSError:
+            pass
+
+    def _delete_live(self):
+        try:
+            os.remove(self._live_path())
+        except OSError:
+            pass
 
 
-# ---------- 内存会话存储 ----------
+# ---------- 内存会话存储（磁盘快照兜底，重启后可恢复） ----------
 _SESSIONS: dict[str, Session] = {}
 
 
 def create_session(resume_text: str, jd_text: str) -> Session:
     s = Session(resume_text, jd_text)
     _SESSIONS[s.id] = s
+    s._persist_live()
     return s
 
 
 def get_session(session_id: str) -> Optional[Session]:
-    return _SESSIONS.get(session_id)
+    s = _SESSIONS.get(session_id)
+    if s is not None:
+        return s
+    # 内存没有（如服务重启过）：尝试从磁盘快照恢复
+    if not session_id or not re.fullmatch(r"[0-9a-f]{12}", session_id):
+        return None
+    path = os.path.join(LIVE_DIR, f"{session_id}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        s = Session.from_snapshot(data)
+        _SESSIONS[s.id] = s
+        return s
+    except (OSError, ValueError, KeyError):
+        return None
