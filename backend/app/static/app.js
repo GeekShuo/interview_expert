@@ -445,6 +445,9 @@ function renderProblem(p) {
   showCodePane();
   const lang = $("langSelect").value;
   if (state.editor) state.editor.setValue(starterCode(lang));
+  if (p.judgeable) {
+    addSystemNote("🧪 本题提交代码后，系统会在沙箱中用测试用例真实运行并自动判题（Python），判题结果面试官同样可见。可多次提交修正。");
+  }
 }
 
 // 生成编辑器起始代码：Python 且题目带签名时，预填函数/类骨架（保证判题入口命名正确）
@@ -477,7 +480,9 @@ function renderJudgeResult(res) {
   } else if (res.error) {
     card.className = "max-w-[85%] rounded-2xl px-4 py-3 text-xs border border-red-400/30 bg-red-500/10";
     inner = `<div class="font-medium text-red-300 mb-1">🧪 自动判题 · 运行失败（0/${res.total ?? "?"}）</div>
-      <pre class="whitespace-pre-wrap text-red-200/90 bg-ink-900/60 rounded-lg p-2 max-h-40 overflow-y-auto">${escapeHtml(res.error)}</pre>`;
+      <div class="text-red-200/80 mb-1.5">代码没能成功运行——通常是语法/缩进错误，或函数、类名与题目给出的签名不一致。修正后可再次提交。</div>
+      <details><summary class="cursor-pointer text-slate-400 hover:text-slate-200">查看错误详情</summary>
+      <pre class="whitespace-pre-wrap text-red-200/90 bg-ink-900/60 rounded-lg p-2 mt-1 max-h-40 overflow-y-auto">${escapeHtml(res.error)}</pre></details>`;
   } else {
     const allPass = res.passed === res.total;
     card.className = "max-w-[85%] rounded-2xl px-4 py-3 text-xs border " +
@@ -486,13 +491,17 @@ function renderJudgeResult(res) {
       🧪 自动判题 · 通过 ${res.passed}/${res.total} 组用例 ${allPass ? "✅" : ""}</div>`;
     const fails = (res.results || []).map((r, i) => ({ ...r, idx: i + 1 })).filter((r) => !r.ok).slice(0, 3);
     if (fails.length) {
+      // 面试模式：默认只给"你的输出"，输入/期望折叠——鼓励像真实面试一样先自己排查
       inner += fails.map((r) => `
         <div class="mt-1.5 bg-ink-900/60 rounded-lg p-2 space-y-0.5">
-          <div class="text-slate-400">用例 ${r.idx} 未通过</div>
-          <div>输入：<code class="text-slate-300">${escapeHtml(JSON.stringify(r.input))}</code></div>
-          <div>期望：<code class="text-emerald-300">${escapeHtml(JSON.stringify(r.expected))}</code></div>
-          <div>实际：<code class="text-red-300">${escapeHtml(JSON.stringify(r.got))}</code>${r.error ? `　<span class="text-red-300">${escapeHtml(r.error)}</span>` : ""}</div>
+          <div class="text-slate-400">用例 ${r.idx} 未通过${r.error ? `　<span class="text-red-300">${escapeHtml(r.error)}</span>` : ""}</div>
+          <div>你的输出：<code class="text-red-300">${escapeHtml(JSON.stringify(r.got))}</code></div>
+          <details><summary class="cursor-pointer text-slate-500 hover:text-slate-300">展开用例详情（建议先自己排查，更接近真实面试）</summary>
+            <div class="mt-1">输入：<code class="text-slate-300">${escapeHtml(JSON.stringify(r.input))}</code></div>
+            <div>期望：<code class="text-emerald-300">${escapeHtml(JSON.stringify(r.expected))}</code></div>
+          </details>
         </div>`).join("");
+      inner += `<div class="mt-1.5 text-slate-500">修正代码后可再次提交。</div>`;
     }
   }
   card.innerHTML = inner;

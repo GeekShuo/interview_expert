@@ -179,6 +179,8 @@ class Session:
                 summary = runner.summarize_for_llm(judge_result)
                 self.judge_results.append({
                     "problem": self.current_problem["title"],
+                    "tags": self.current_problem.get("tags", []),
+                    "difficulty": self.current_problem.get("difficulty", ""),
                     "supported": judge_result.get("supported", False),
                     "passed": judge_result.get("passed"),
                     "total": judge_result.get("total"),
@@ -265,7 +267,9 @@ class Session:
         )
         memo_text = "\n".join(self.memo) or "（无）"
         judge_text = "\n".join(
-            f"- 《{j['problem']}》：{j['summary']}" for j in self.judge_results
+            f"- 《{j['problem']}》（难度:{j.get('difficulty', '?')}，"
+            f"考察:{'、'.join(j.get('tags', []))}）：{j['summary']}"
+            for j in self.judge_results
         ) or "（本场无自动判题记录）"
         prompt = prompts.report_prompt(
             self.persona, self.resume, self.jd, transcript, memo_text, judge_text
