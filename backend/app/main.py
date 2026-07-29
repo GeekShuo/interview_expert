@@ -123,15 +123,14 @@ def chat(req: ChatRequest):
 
 @app.post("/api/submit_code")
 def submit_code(req: CodeSubmitRequest):
-    """提交算法题代码，作为一条特殊消息进入对话。"""
+    """提交算法题代码：先沙箱自动判题，再进入对话由面试官点评。"""
     s = sess.get_session(req.session_id)
     if not s:
         raise HTTPException(404, "会话不存在")
-    msg = f"这是我写的代码（{req.language}）：\n```{req.language}\n{req.code}\n```"
 
     def gen():
         try:
-            for ev in s.stream_reply(msg):
+            for ev in s.stream_code_submission(req.code, req.language):
                 yield _sse(ev)
         except Exception as e:
             yield _sse({"type": "error", "message": "面试官服务暂时不可用，请稍后重试"})

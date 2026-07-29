@@ -13,7 +13,7 @@ import re
 import threading
 from typing import Iterator, Optional
 
-from . import llm, prompts, personas, parser
+from . import llm, prompts, personas, parser, runner
 from . import history as history_store
 from .problems import pick_problem
 from .questions import pick_questions
@@ -50,6 +50,7 @@ class Session:
         self.verdict: Optional[str] = None      # 通过 / 待定 / 不通过
         self.report_text = ""                    # 完整报告 markdown
         self.abandoned = False
+        self.judge_results: list[dict] = []      # 每次代码提交的自动判题结果（供报告引用）
         self._saved = False                      # 历史是否已落盘
         self._lock = threading.Lock()            # 串行化同一会话的并发请求，防止状态竞争
         self._report_done = False                # 报告是否已生成（防重入）
@@ -166,6 +167,32 @@ class Session:
         with self._lock:
             yield from self._stream_reply_locked(user_message)
 
+    def stream_code_submission(self, code: str, language: str) -> Iterator[dict]:
+        """提交代码：先沙箱自动判题（客观），再把代码+判题结果交给面试官评价。"""
+        with self._lock:
+            judge_result = None
+            if self.stage == Stage.CODING and self.current_problem:
+                judge_result = runner.judge(self.current_problem, code, language)
+                yield {"type": "judge", "result": judge_result}
+            msg = f"这是我写的代码（{language}）：\n```{language}\n{code}\n```"
+            if judge_result is not None:
+                summary = runner.summarize_for_llm(judge_result)
+                self.judge_results.append({
+                    "problem": self.current_problem["title"],
+                    "supported": judge_result.get("supported", False),
+                    "passed": judge_result.get("passed"),
+                    "total": judge_result.get("total"),
+                    "summary": summary,
+                })
+                self.memo.append(
+                    f"[算法手撕·自动判题] 《{self.current_problem['title']}》 {summary}"
+                )
+                msg += (
+                    "\n\n【系统自动判题结果（沙箱真实运行，客观事实，候选人界面上同样可见）】\n"
+                    + summary
+                )
+            yield from self._stream_reply_locked(msg)
+
     def _stream_reply_locked(self, user_message: Optional[str]) -> Iterator[dict]:
         if user_message:
             self.history.append({"role": "user", "content": user_message})
@@ -223,6 +250,8 @@ class Session:
         yield {"type": "problem", "problem": {
             "id": p["id"], "title": p["title"], "difficulty": p["difficulty"],
             "tags": p["tags"], "statement": p["statement"],
+            "signature": p.get("signature", ""),
+            "judgeable": bool(p.get("tests")),
         }}
 
     def _generate_report(self) -> Iterator[dict]:
@@ -235,8 +264,11 @@ class Session:
             for m in self.history
         )
         memo_text = "\n".join(self.memo) or "（无）"
+        judge_text = "\n".join(
+            f"- 《{j['problem']}》：{j['summary']}" for j in self.judge_results
+        ) or "（本场无自动判题记录）"
         prompt = prompts.report_prompt(
-            self.persona, self.resume, self.jd, transcript, memo_text
+            self.persona, self.resume, self.jd, transcript, memo_text, judge_text
         )
         yield {"type": "report_start"}
         report_text = ""

@@ -264,7 +264,7 @@ function scrollBottom() {
 }
 
 // ============ SSE 流式核心 ============
-async function streamSSE(url, options, { onToken, onReport, onStage, onProblem }) {
+async function streamSSE(url, options, { onToken, onReport, onStage, onProblem, onJudge }) {
   const res = await fetch(url, options);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -288,6 +288,8 @@ async function streamSSE(url, options, { onToken, onReport, onStage, onProblem }
         onStage && onStage(ev);
       } else if (ev.type === "problem") {
         onProblem && onProblem(ev.problem);
+      } else if (ev.type === "judge") {
+        onJudge && onJudge(ev.result);
       } else if (ev.type === "report_start") {
         onReport && onReport("", true);
       } else if (ev.type === "error") {
@@ -429,20 +431,74 @@ function toggleEditorExpand() {
 }
 
 $("langSelect").addEventListener("change", (e) => {
-  if (state.editor) monaco.editor.setModelLanguage(state.editor.getModel(), e.target.value);
+  if (!state.editor) return;
+  monaco.editor.setModelLanguage(state.editor.getModel(), e.target.value);
+  // 编辑器还是初始骨架时，切语言同步刷新起始代码（避免覆盖用户已写内容）
+  const cur = state.editor.getValue().trim();
+  const isStarter = !cur || /在这里编写你的解法|请保持函数\/类名不变/.test(cur);
+  if (isStarter) state.editor.setValue(starterCode(e.target.value));
 });
 
 function renderProblem(p) {
+  state.currentProblem = p;
   $("problemTitle").textContent = `${p.title}（${p.difficulty}）`;
   showCodePane();
+  const lang = $("langSelect").value;
+  if (state.editor) state.editor.setValue(starterCode(lang));
+}
+
+// 生成编辑器起始代码：Python 且题目带签名时，预填函数/类骨架（保证判题入口命名正确）
+function starterCode(lang) {
+  const p = state.currentProblem;
+  if (lang === "python" && p && p.signature) {
+    const sig = p.signature;
+    const head = `# ${p.title}（${p.difficulty}）\n# 请保持函数/类名不变，提交后系统会用测试用例自动运行你的代码\n`;
+    if (sig.trim().startsWith("class ")) return head + sig + "\n";
+    return head + sig + "\n    # 在这里编写你的解法\n    pass\n";
+  }
   const starter = {
     python: "# 在这里编写你的解法\n",
-    cpp: "// 在这里编写你的解法\n",
-    java: "// 在这里编写你的解法\n",
-    javascript: "// 在这里编写你的解法\n",
+    cpp: "// 在这里编写你的解法（注意：自动判题仅支持 Python，其他语言由面试官人工评判）\n",
+    java: "// 在这里编写你的解法（注意：自动判题仅支持 Python，其他语言由面试官人工评判）\n",
+    javascript: "// 在这里编写你的解法（注意：自动判题仅支持 Python，其他语言由面试官人工评判）\n",
   };
-  const lang = $("langSelect").value;
-  if (state.editor) state.editor.setValue(starter[lang] || "");
+  return starter[lang] || "";
+}
+
+// ============ 沙箱判题结果卡片 ============
+function renderJudgeResult(res) {
+  const wrap = document.createElement("div");
+  wrap.className = "flex justify-start";
+  const card = document.createElement("div");
+  let inner = "";
+  if (!res || res.supported === false) {
+    card.className = "max-w-[85%] rounded-2xl px-4 py-3 text-xs border border-white/10 bg-ink-700/50 text-slate-400";
+    inner = `<div class="font-medium mb-0.5">🧪 自动判题</div><div>${escapeHtml((res && res.message) || "本次未自动判题")}</div>`;
+  } else if (res.error) {
+    card.className = "max-w-[85%] rounded-2xl px-4 py-3 text-xs border border-red-400/30 bg-red-500/10";
+    inner = `<div class="font-medium text-red-300 mb-1">🧪 自动判题 · 运行失败（0/${res.total ?? "?"}）</div>
+      <pre class="whitespace-pre-wrap text-red-200/90 bg-ink-900/60 rounded-lg p-2 max-h-40 overflow-y-auto">${escapeHtml(res.error)}</pre>`;
+  } else {
+    const allPass = res.passed === res.total;
+    card.className = "max-w-[85%] rounded-2xl px-4 py-3 text-xs border " +
+      (allPass ? "border-emerald-400/30 bg-emerald-500/10" : "border-amber-400/30 bg-amber-500/10");
+    inner = `<div class="font-medium mb-1 ${allPass ? "text-emerald-300" : "text-amber-300"}">
+      🧪 自动判题 · 通过 ${res.passed}/${res.total} 组用例 ${allPass ? "✅" : ""}</div>`;
+    const fails = (res.results || []).map((r, i) => ({ ...r, idx: i + 1 })).filter((r) => !r.ok).slice(0, 3);
+    if (fails.length) {
+      inner += fails.map((r) => `
+        <div class="mt-1.5 bg-ink-900/60 rounded-lg p-2 space-y-0.5">
+          <div class="text-slate-400">用例 ${r.idx} 未通过</div>
+          <div>输入：<code class="text-slate-300">${escapeHtml(JSON.stringify(r.input))}</code></div>
+          <div>期望：<code class="text-emerald-300">${escapeHtml(JSON.stringify(r.expected))}</code></div>
+          <div>实际：<code class="text-red-300">${escapeHtml(JSON.stringify(r.got))}</code>${r.error ? `　<span class="text-red-300">${escapeHtml(r.error)}</span>` : ""}</div>
+        </div>`).join("");
+    }
+  }
+  card.innerHTML = inner;
+  wrap.appendChild(card);
+  $("messages").appendChild(wrap);
+  scrollBottom();
 }
 
 $("submitCodeBtn").addEventListener("click", async () => {
@@ -466,6 +522,7 @@ $("submitCodeBtn").addEventListener("click", async () => {
       onToken: (t) => { acc += t; inner.innerHTML = safeMd(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
       onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
       onProblem: (p) => renderProblem(p),
+      onJudge: (r) => renderJudgeResult(r),
       onReport: handleReportToken,
     });
   } catch (e) {
