@@ -268,7 +268,9 @@ async function streamSSE(url, options, { onToken, onReport, onStage, onProblem }
       const chunk = buf.slice(0, idx).trim();
       buf = buf.slice(idx + 2);
       if (!chunk.startsWith("data:")) continue;
-      const ev = JSON.parse(chunk.slice(5).trim());
+      let ev;
+      try { ev = JSON.parse(chunk.slice(5).trim()); }
+      catch { continue; } // 跳过无法解析的片段，避免整条流崩溃
       if (ev.type === "token") {
         if (ev.channel === "report") onReport && onReport(ev.text);
         else onToken && onToken(ev.text);
@@ -292,19 +294,24 @@ async function streamOpening() {
   let acc = "";
   const spk = makeSpeaker(voiceOut);
   state.streaming = true;
-  await streamSSE("/api/opening?session_id=" + state.sessionId, { method: "GET" }, {
-    onToken: (t) => {
-      acc += t;
-      inner.innerHTML = marked.parse(acc);
-      if (voiceMode) spk.feed(acc);
-      scrollBottom();
-    },
-    onStage: (ev) => setStage(ev.stage),
-    onProblem: (p) => renderProblem(p),
-    onReport: handleReportToken,
-  });
-  inner.parentElement.classList.remove("cursor-blink");
-  state.streaming = false;
+  try {
+    await streamSSE("/api/opening?session_id=" + state.sessionId, { method: "GET" }, {
+      onToken: (t) => {
+        acc += t;
+        inner.innerHTML = marked.parse(acc);
+        if (voiceMode) spk.feed(acc);
+        scrollBottom();
+      },
+      onStage: (ev) => setStage(ev.stage),
+      onProblem: (p) => renderProblem(p),
+      onReport: handleReportToken,
+    });
+  } catch (e) {
+    inner.innerHTML = marked.parse(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+  } finally {
+    inner.parentElement.classList.remove("cursor-blink");
+    state.streaming = false;
+  }
   if (voiceMode) spk.finish(startListeningTurn);
 }
 
@@ -320,6 +327,10 @@ $("userInput").addEventListener("keydown", (e) => {
 async function sendMessage() {
   const text = $("userInput").value.trim();
   if (!text || state.streaming) return;
+  if (state.currentStage === "finished") {
+    addSystemNote("面试已结束，点击「重新开始」可再开一场");
+    return;
+  }
   if (voiceIn.listening) voiceIn.stop();
   voiceOut.cancel(); // 停掉残留朗读
   $("userInput").value = "";
@@ -332,19 +343,24 @@ async function sendMessage() {
   const spk = makeSpeaker(voiceOut);
   state.streaming = true;
   $("sendBtn").disabled = true;
-  await streamSSE("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: state.sessionId, message: text }),
-  }, {
-    onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
-    onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
-    onProblem: (p) => renderProblem(p),
-    onReport: handleReportToken,
-  });
-  inner.parentElement.classList.remove("cursor-blink");
-  state.streaming = false;
-  $("sendBtn").disabled = false;
+  try {
+    await streamSSE("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: state.sessionId, message: text }),
+    }, {
+      onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
+      onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
+      onProblem: (p) => renderProblem(p),
+      onReport: handleReportToken,
+    });
+  } catch (e) {
+    inner.innerHTML = marked.parse(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+  } finally {
+    inner.parentElement.classList.remove("cursor-blink");
+    state.streaming = false;
+    $("sendBtn").disabled = false;
+  }
   if (voiceMode) spk.finish(startListeningTurn);
 }
 
@@ -431,18 +447,23 @@ $("submitCodeBtn").addEventListener("click", async () => {
   const spk = makeSpeaker(voiceOut);
   voiceOut.cancel();
   state.streaming = true;
-  await streamSSE("/api/submit_code", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: state.sessionId, code, language: lang }),
-  }, {
-    onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
-    onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
-    onProblem: (p) => renderProblem(p),
-    onReport: handleReportToken,
-  });
-  inner.parentElement.classList.remove("cursor-blink");
-  state.streaming = false;
+  try {
+    await streamSSE("/api/submit_code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: state.sessionId, code, language: lang }),
+    }, {
+      onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
+      onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
+      onProblem: (p) => renderProblem(p),
+      onReport: handleReportToken,
+    });
+  } catch (e) {
+    inner.innerHTML = marked.parse(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+  } finally {
+    inner.parentElement.classList.remove("cursor-blink");
+    state.streaming = false;
+  }
   // 若离开算法环节回到对话，则读完开麦；否则仅朗读
   if (voiceMode) spk.finish(state.currentStage === "coding" ? null : startListeningTurn);
 });
