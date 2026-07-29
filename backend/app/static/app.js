@@ -108,7 +108,7 @@ $("resumeFile").addEventListener("change", async (e) => {
       if (text) $("resumeText").value = text; // 保留错误信息供参考
     } else {
       $("resumeText").value = text;
-      $("resumeFileName").textContent = "✓ " + file.name;
+      $("resumeFileName").textContent = `✓ ${file.name} · 已提取 ${text.length} 字，可在下方核对/编辑`;
     }
   } catch {
     $("resumeFileName").textContent = "解析失败，请改用粘贴";
@@ -141,6 +141,7 @@ async function startInterview() {
     state.stages = data.stages;
     state.currentStage = data.stage;
     sessionStorage.setItem("lastSessionId", data.session_id);
+    localStorage.setItem("iv_session_id", data.session_id); // 供刷新/重开页面后恢复
 
     if (!data.llm_ready) {
       showHint("⚠️ 后端未配置有效的 LLM API Key，面试官将无法回复。请在 backend/.env 中填写。");
@@ -156,6 +157,11 @@ async function startInterview() {
     $("personaTitle").textContent = data.persona.title + "　|　" + (data.jd.title || "算法岗");
     renderStageBar();
 
+    // 简历解析结果可见：让用户知道面试官"读到了什么"
+    if (data.resume_summary) {
+      addSystemNote("📄 面试官已读简历，理解为：" + truncate(data.resume_summary, 100));
+    }
+
     // 拉开场白
     streamOpening();
   } catch (e) {
@@ -170,6 +176,63 @@ function showHint(msg) {
   h.textContent = msg;
   h.classList.remove("hidden");
 }
+
+function truncate(s, n) {
+  s = s || "";
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
+
+// ============ 会话恢复（刷新/重开页面后继续进行中的面试）============
+async function checkResumable() {
+  const sid = localStorage.getItem("iv_session_id");
+  if (!sid) return;
+  try {
+    const res = await fetch("/api/state?session_id=" + encodeURIComponent(sid));
+    if (!res.ok) { localStorage.removeItem("iv_session_id"); return; }
+    const st = await res.json();
+    if (st.stage === "finished" || st.stage === "report" || st.abandoned) {
+      localStorage.removeItem("iv_session_id");
+      return;
+    }
+    const banner = $("resumeBanner");
+    banner.classList.remove("hidden");
+    $("resumeInfo").textContent =
+      `${st.persona.name} · ${st.jd.title || "算法岗"} · 进行到「${st.stage_label}」环节`;
+    $("resumeBtn").onclick = () => resumeInterview(st);
+  } catch { /* 服务不可用时静默 */ }
+}
+
+function resumeInterview(st) {
+  state.sessionId = st.session_id;
+  state.stages = st.stages;
+  state.currentStage = st.stage;
+  sessionStorage.setItem("lastSessionId", st.session_id);
+
+  $("setup").classList.add("hidden");
+  $("interview").classList.remove("hidden");
+  $("interview").classList.add("flex");
+  $("personaName").textContent = st.persona.name + " · " + st.persona.direction;
+  $("personaTitle").textContent = st.persona.title + "　|　" + (st.jd.title || "算法岗");
+  renderStageBar();
+
+  // 重建对话
+  addSystemNote("已恢复上次面试，继续加油！");
+  (st.history || []).forEach((m) => {
+    if (m.role === "user") renderUserMessage(m.content);
+    else addMessage("assistant").innerHTML = safeMd(m.content);
+  });
+  // 恢复代码面板（不重复插入判题提示）
+  if (st.stage === "coding" && st.current_problem) {
+    state.currentProblem = st.current_problem;
+    $("problemTitle").textContent = `${st.current_problem.title}（${st.current_problem.difficulty}）`;
+    setStage("coding");
+  } else {
+    setStage(st.stage);
+  }
+  scrollBottom();
+}
+
+checkResumable();
 
 // ============ 环节进度条 ============
 function renderStageBar() {
@@ -218,6 +281,7 @@ function setStage(stageKey) {
     $("submitCodeBtn").classList.remove("pulse-attn");
   }
   if (stageKey === "report" || stageKey === "finished") {
+    localStorage.removeItem("iv_session_id"); // 面试已收尾，不再提供恢复
     openReport();
   }
 }
@@ -393,7 +457,7 @@ function showCodePane() {
   if (!state.editor) {
     require(["vs/editor/editor.main"], () => {
       state.editor = monaco.editor.create($("editor"), {
-        value: "# 在这里编写你的解法\n",
+        value: starterCode($("langSelect").value),
         language: "python",
         theme: "vs-dark",
         fontSize: 14,
@@ -639,6 +703,7 @@ async function loadHistory() {
     const res = await fetch("/api/history");
     const data = await res.json();
     const records = data.records || [];
+    renderHistoryStats(records);
     if (records.length === 0) {
       list.innerHTML = '<div class="text-slate-500 text-sm">暂无历史面试记录。完成一次面试后会出现在这里。</div>';
       return;
@@ -668,6 +733,78 @@ async function loadHistory() {
   } catch (e) {
     list.innerHTML = '<div class="text-red-400 text-sm">加载失败：' + e.message + "</div>";
   }
+}
+
+// ============ 成长曲线与薄弱点画像 ============
+function renderHistoryStats(records) {
+  const box = $("historyStats");
+  const done = records.filter((r) => !r.abandoned && r.score != null).reverse(); // 按时间正序
+  if (done.length < 2) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+
+  const scores = done.map((r) => r.score);
+  const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+  const best = Math.max(...scores);
+  const delta = scores[scores.length - 1] - scores[0];
+  const deltaHtml = delta === 0 ? "" : delta > 0
+    ? `<span class="text-emerald-300">↑${delta}</span>`
+    : `<span class="text-red-300">↓${-delta}</span>`;
+
+  // 分数趋势折线（SVG sparkline）
+  const W = 240, H = 44, P = 4;
+  const lo = Math.min(...scores), hi = Math.max(...scores);
+  const span = hi - lo || 1;
+  const pts = scores.map((s, i) => {
+    const x = P + (i * (W - 2 * P)) / Math.max(scores.length - 1, 1);
+    const y = H - P - ((s - lo) * (H - 2 * P)) / span;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const spark = `<svg width="${W}" height="${H}" class="block">
+    <polyline points="${pts.join(" ")}" fill="none" stroke="#4f6ef7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    ${pts.map((p) => `<circle cx="${p.split(",")[0]}" cy="${p.split(",")[1]}" r="2.5" fill="#8ea2ff"/>`).join("")}
+  </svg>`;
+
+  // 各维度均分（来自报告分项评分）
+  const dimSum = {}, dimCnt = {};
+  done.forEach((r) => Object.entries(r.dimensions || {}).forEach(([k, v]) => {
+    dimSum[k] = (dimSum[k] || 0) + v;
+    dimCnt[k] = (dimCnt[k] || 0) + 1;
+  }));
+  const dims = Object.keys(dimSum).map((k) => ({ name: k, avg: dimSum[k] / dimCnt[k] }));
+  dims.sort((a, b) => a.avg - b.avg);
+  const dimHtml = dims.length ? dims.map((d) => `
+    <div class="flex items-center gap-2 text-xs">
+      <span class="w-24 truncate text-slate-400">${escapeHtml(d.name)}</span>
+      <div class="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+        <div class="h-full rounded-full ${d.avg < 3 ? "bg-red-400/80" : d.avg < 4 ? "bg-amber-400/80" : "bg-emerald-400/80"}" style="width:${(d.avg / 5 * 100).toFixed(0)}%"></div>
+      </div>
+      <span class="w-8 text-right ${d.avg < 3 ? "text-red-300" : "text-slate-300"}">${d.avg.toFixed(1)}</span>
+    </div>`).join("") : '<div class="text-xs text-slate-500">暂无分项数据</div>';
+
+  // 薄弱标签（判题未通过题目的考察点）
+  const tagCnt = {};
+  done.forEach((r) => (r.weak_tags || []).forEach((t) => { tagCnt[t] = (tagCnt[t] || 0) + 1; }));
+  const weak = Object.entries(tagCnt).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const weakHtml = weak.length
+    ? weak.map(([t, c]) => `<span class="px-2 py-0.5 rounded-full bg-red-500/10 text-red-300 border border-red-400/20">${escapeHtml(t)}${c > 1 ? " ×" + c : ""}</span>`).join(" ")
+    : '<span class="text-slate-500">暂无（代码题全通过或未判题）</span>';
+
+  box.innerHTML = `
+    <div class="rounded-xl border border-white/5 bg-ink-700/40 p-4">
+      <div class="flex items-center justify-between flex-wrap gap-4">
+        <div class="flex items-center gap-5 text-sm">
+          <div><div class="text-2xl font-bold">${done.length}</div><div class="text-xs text-slate-500">完成场次</div></div>
+          <div><div class="text-2xl font-bold">${avg}</div><div class="text-xs text-slate-500">平均分</div></div>
+          <div><div class="text-2xl font-bold">${best}</div><div class="text-xs text-slate-500">最高分</div></div>
+          <div><div class="text-2xl font-bold">${deltaHtml || "—"}</div><div class="text-xs text-slate-500">首末场变化</div></div>
+        </div>
+        <div><div class="text-xs text-slate-500 mb-1">分数趋势</div>${spark}</div>
+      </div>
+      <div class="grid md:grid-cols-2 gap-4 mt-4 pt-3 border-t border-white/5">
+        <div><div class="text-xs text-slate-500 mb-2">能力维度均分（低分靠前）</div><div class="space-y-1.5">${dimHtml}</div></div>
+        <div><div class="text-xs text-slate-500 mb-2">代码薄弱点（判题未通过的考察标签）</div><div class="flex flex-wrap gap-1.5 text-xs">${weakHtml}</div></div>
+      </div>
+    </div>`;
 }
 
 async function viewHistoryDetail(id) {

@@ -52,6 +52,15 @@
 
       <div id="setupHint" class="text-amber-400/80 text-xs mt-4 hidden"></div>
 
+      <!-- 进行中面试恢复入口 -->
+      <div id="resumeBanner" class="hidden mt-4 rounded-xl border border-brand-500/40 bg-brand-500/10 p-4 flex items-center justify-between gap-3">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-brand-100">⏸ 你有一场进行中的面试</div>
+          <div id="resumeInfo" class="text-xs text-slate-400 truncate mt-0.5"></div>
+        </div>
+        <button id="resumeBtn" class="shrink-0 text-xs px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 font-medium transition">继续面试</button>
+      </div>
+
       <button id="startBtn"
         class="mt-6 w-full h-12 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-500 hover:from-brand-600 hover:to-indigo-600 font-semibold text-white transition shadow-lg shadow-brand-500/20 disabled:opacity-50">
         开始面试
@@ -152,7 +161,10 @@
         <h2 class="font-bold text-lg">📚 历史面试</h2>
         <button id="closeHistory" class="text-slate-400 hover:text-white text-xl leading-none">×</button>
       </div>
-      <div id="historyList" class="overflow-y-auto px-6 py-5 space-y-3"></div>
+      <div class="overflow-y-auto">
+        <div id="historyStats" class="hidden px-6 pt-5"></div>
+        <div id="historyList" class="px-6 py-5 space-y-3"></div>
+      </div>
     </div>
   </div>
 

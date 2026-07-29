@@ -51,6 +51,7 @@ class Session:
         self.report_text = ""                    # 完整报告 markdown
         self.abandoned = False
         self.judge_results: list[dict] = []      # 每次代码提交的自动判题结果（供报告引用）
+        self.dimensions: dict = {}               # 报告分项评分（成长画像用）
         self._saved = False                      # 历史是否已落盘
         self._lock = threading.Lock()            # 串行化同一会话的并发请求，防止状态竞争
         self._report_done = False                # 报告是否已生成（防重入）
@@ -281,6 +282,7 @@ class Session:
             yield {"type": "token", "text": delta, "channel": "report"}
         self.report_text = report_text
         self.score, self.verdict = self._parse_score(report_text)
+        self.dimensions = self._parse_dimensions(report_text)
         self.stage = Stage.FINISHED
         self.finished_at = time.time()
         self._save_history()
@@ -306,6 +308,29 @@ class Session:
             verdict = v.group(1)
         return total, verdict
 
+    @staticmethod
+    def _parse_dimensions(text: str) -> dict:
+        """从报告「分项评分」中解析各维度分数（x/5），用于跨场成长画像。"""
+        dims = {}
+        for m in re.finditer(r"\*\*([^*\n]{2,14})\*\*[：:]\s*(\d(?:\.\d)?)\s*/\s*5", text):
+            name = m.group(1).strip()
+            try:
+                dims[name] = float(m.group(2))
+            except ValueError:
+                continue
+        return dims
+
+    # ---------- 对外：会话恢复所需的公开状态 ----------
+    def public_history(self) -> list[dict]:
+        """对候选人可见的对话历史（隐去注入给 LLM 的判题附言）。"""
+        out = []
+        for m in self.history:
+            c = m["content"]
+            if m["role"] == "user":
+                c = c.split("\n\n【系统自动判题结果", 1)[0]
+            out.append({"role": m["role"], "content": c})
+        return out
+
     def _build_history_record(self) -> dict:
         transcript = "\n".join(
             f"{'候选人' if m['role'] == 'user' else '面试官'}：{m['content']}"
@@ -321,6 +346,12 @@ class Session:
             "score": self.score,
             "verdict": self.verdict,
             "abandoned": self.abandoned,
+            "dimensions": self.dimensions,
+            "judge_passed": sum(j.get("passed") or 0 for j in self.judge_results),
+            "judge_total": sum(j.get("total") or 0 for j in self.judge_results),
+            "weak_tags": sorted({t for j in self.judge_results
+                                 if (j.get("total") or 0) > (j.get("passed") or 0)
+                                 for t in j.get("tags", [])}),
             "report": self.report_text,
             "transcript": transcript,
         }

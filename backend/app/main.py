@@ -140,15 +140,33 @@ def submit_code(req: CodeSubmitRequest):
 
 @app.get("/api/state")
 def state(session_id: str):
+    """会话完整状态：供前端刷新/重开页面后恢复进行中的面试。"""
     s = sess.get_session(session_id)
     if not s:
         raise HTTPException(404, "会话不存在")
+    p = s.current_problem
     return {
         "session_id": s.id,
         "stage": s.stage.value,
         "stage_label": STAGE_LABELS[s.stage],
         "progress": s.progress,
-        "current_problem": s.current_problem,
+        "persona": s.persona,
+        "jd": {"title": s.jd.get("title"), "requirements": s.jd.get("requirements")},
+        "resume_summary": s.resume.get("summary"),
+        "stages": [
+            {"key": st.value, "label": STAGE_LABELS[st]}
+            for st in [Stage.GREETING, Stage.PROJECT, Stage.CODING, Stage.QUIZ, Stage.REPORT]
+        ],
+        "history": s.public_history(),
+        "current_problem": None if not p else {
+            "id": p["id"], "title": p["title"], "difficulty": p["difficulty"],
+            "tags": p["tags"], "statement": p["statement"],
+            "signature": p.get("signature", ""), "judgeable": bool(p.get("tests")),
+        },
+        "score": s.score,
+        "verdict": s.verdict,
+        "report": s.report_text,
+        "abandoned": s.abandoned,
     }
 
 

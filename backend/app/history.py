@@ -87,6 +87,10 @@ def list_records() -> list:
             "score": r.get("score"),
             "verdict": r.get("verdict"),
             "abandoned": r.get("abandoned", False),
+            "dimensions": r.get("dimensions") or {},
+            "judge_passed": r.get("judge_passed"),
+            "judge_total": r.get("judge_total"),
+            "weak_tags": r.get("weak_tags") or [],
         })
     return summary
 
