@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import session as sess
@@ -160,6 +160,12 @@ def delete_history(record_id: str):
 @app.get("/")
 def index():
     return FileResponse(str(STATIC_DIR / "index.html"))
+
+
+@app.get("/favicon.ico")
+def favicon():
+    # 无图标文件，返回 204 避免浏览器反复请求造成 console 404 噪音
+    return Response(status_code=204)
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

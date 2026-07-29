@@ -98,8 +98,15 @@ $("resumeFile").addEventListener("change", async (e) => {
   try {
     const res = await fetch("/api/upload_resume", { method: "POST", body: fd });
     const data = await res.json();
-    $("resumeText").value = data.text || "";
-    $("resumeFileName").textContent = "✓ " + file.name;
+    const text = data.text || "";
+    if (!text || text.startsWith("[") ) {
+      // 解析失败或未提取到文本（如畸形 PDF / 扫描件）
+      $("resumeFileName").textContent = "⚠️ 未提取到文本，请改用粘贴";
+      if (text) $("resumeText").value = text; // 保留错误信息供参考
+    } else {
+      $("resumeText").value = text;
+      $("resumeFileName").textContent = "✓ " + file.name;
+    }
   } catch {
     $("resumeFileName").textContent = "解析失败，请改用粘贴";
   }
