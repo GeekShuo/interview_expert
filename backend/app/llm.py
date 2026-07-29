@@ -13,6 +13,8 @@ def get_client() -> OpenAI:
         _client = OpenAI(
             base_url=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY or "sk-placeholder",
+            timeout=60.0,      # 避免LLM卡住时SSE长期挂起
+            max_retries=2,     # 偶发网络错误自动重试
         )
     return _client
 

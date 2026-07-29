@@ -9,6 +9,9 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+// 安全渲染 markdown：marked 解析后用 DOMPurify 消毒，防 XSS（LLM/用户/历史内容皆不可信）
+const safeMd = (t) => (window.DOMPurify ? window.DOMPurify.sanitize(marked["parse"](t)) : marked["parse"](t));
+
 // ============ 语音（ASR + TTS）============
 const voiceOut = new VoiceOutput();
 const voiceIn = new VoiceInput();
@@ -251,7 +254,7 @@ function renderUserMessage(text) {
   const looksLikeCode =
     /[\n;{}]/.test(text) &&
     /(def |class |void\s+main|public |private |import |function |=>|console\.|print\(|return |#include|using )/.test(text);
-  const html = looksLikeCode ? marked.parse("```\n" + text + "\n```") : marked.parse(text);
+  const html = looksLikeCode ? safeMd("```\n" + text + "\n```") : safeMd(text);
   addMessage("user").innerHTML = html;
 }
 
@@ -305,7 +308,7 @@ async function streamOpening() {
     await streamSSE("/api/opening?session_id=" + state.sessionId, { method: "GET" }, {
       onToken: (t) => {
         acc += t;
-        inner.innerHTML = marked.parse(acc);
+        inner.innerHTML = safeMd(acc);
         if (voiceMode) spk.feed(acc);
         scrollBottom();
       },
@@ -314,7 +317,7 @@ async function streamOpening() {
       onReport: handleReportToken,
     });
   } catch (e) {
-    inner.innerHTML = marked.parse(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+    inner.innerHTML = safeMd(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
   } finally {
     inner.parentElement.classList.remove("cursor-blink");
     state.streaming = false;
@@ -356,13 +359,13 @@ async function sendMessage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: state.sessionId, message: text }),
     }, {
-      onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
+      onToken: (t) => { acc += t; inner.innerHTML = safeMd(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
       onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
       onProblem: (p) => renderProblem(p),
       onReport: handleReportToken,
     });
   } catch (e) {
-    inner.innerHTML = marked.parse(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+    inner.innerHTML = safeMd(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
   } finally {
     inner.parentElement.classList.remove("cursor-blink");
     state.streaming = false;
@@ -446,7 +449,7 @@ $("submitCodeBtn").addEventListener("click", async () => {
   if (!state.editor || state.streaming) return;
   const code = state.editor.getValue();
   const lang = $("langSelect").value;
-  addMessage("user").innerHTML = marked.parse("已提交代码：\n```" + lang + "\n" + code + "\n```");
+  addMessage("user").innerHTML = safeMd("已提交代码：\n```" + lang + "\n" + code + "\n```");
 
   const inner = addMessage("assistant");
   inner.parentElement.classList.add("cursor-blink");
@@ -460,13 +463,13 @@ $("submitCodeBtn").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: state.sessionId, code, language: lang }),
     }, {
-      onToken: (t) => { acc += t; inner.innerHTML = marked.parse(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
+      onToken: (t) => { acc += t; inner.innerHTML = safeMd(acc); if (voiceMode) spk.feed(acc); scrollBottom(); },
       onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
       onProblem: (p) => renderProblem(p),
       onReport: handleReportToken,
     });
   } catch (e) {
-    inner.innerHTML = marked.parse(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+    inner.innerHTML = safeMd(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
   } finally {
     inner.parentElement.classList.remove("cursor-blink");
     state.streaming = false;
@@ -485,7 +488,7 @@ function handleReportToken(text, start) {
     return;
   }
   reportAcc += text;
-  $("reportContent").innerHTML = marked.parse(reportAcc);
+  $("reportContent").innerHTML = safeMd(reportAcc);
   renderReportScore(reportAcc);
   const rc = $("reportContent");
   rc.scrollTop = rc.scrollHeight;
@@ -580,13 +583,13 @@ async function loadHistory() {
         : `<span class="text-xs px-2 py-0.5 rounded-full ${scoreColor(r.score, r.verdict)}">${r.score != null ? r.score + "分" : "—"}${r.verdict ? " · " + r.verdict : ""}</span>`;
       return `<div class="rounded-xl border border-white/5 bg-ink-700/40 p-4 flex items-center justify-between gap-3">
         <div class="min-w-0">
-          <div class="font-medium text-sm truncate">${r.persona_name || "面试官"} · ${r.persona_title || ""}</div>
-          <div class="text-xs text-slate-400 truncate">${r.jd_title || "算法岗"}　|　${fmtDate(r.finished_at)}</div>
+          <div class="font-medium text-sm truncate">${escapeHtml(r.persona_name || "面试官")} · ${escapeHtml(r.persona_title || "")}</div>
+          <div class="text-xs text-slate-400 truncate">${escapeHtml(r.jd_title || "算法岗")}　|　${fmtDate(r.finished_at)}</div>
         </div>
         ${badge}
         <div class="flex items-center gap-2 shrink-0">
-          <button class="hist-view text-xs px-3 py-1.5 rounded-lg bg-brand-500/90 hover:bg-brand-600 font-medium" data-id="${r.id}">查看</button>
-          <button class="hist-del text-xs px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-red-400 hover:text-red-300" data-id="${r.id}">删除</button>
+          <button class="hist-view text-xs px-3 py-1.5 rounded-lg bg-brand-500/90 hover:bg-brand-600 font-medium" data-id="${escapeHtml(r.id)}">查看</button>
+          <button class="hist-del text-xs px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-red-400 hover:text-red-300" data-id="${escapeHtml(r.id)}">删除</button>
         </div>
       </div>`;
     }).join("");
@@ -609,7 +612,7 @@ async function viewHistoryDetail(id) {
     const transcriptHtml = rec.transcript
       ? `<details class="mt-4 pt-3 border-t border-white/5"><summary class="cursor-pointer text-slate-400 text-xs">查看完整对话记录</summary><pre class="mt-2 whitespace-pre-wrap text-xs text-slate-300 bg-ink-900/50 rounded-lg p-3">${escapeHtml(rec.transcript)}</pre></details>`
       : "";
-    $("reportContent").innerHTML = marked.parse(rec.report || "（无报告）") + transcriptHtml;
+    $("reportContent").innerHTML = safeMd(rec.report || "（无报告）") + transcriptHtml;
     $("reportContent").scrollTop = 0;
     closeHistory();
     openReport();
@@ -629,5 +632,5 @@ async function deleteHistory(id) {
 }
 
 function escapeHtml(s) {
-  return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  return (s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }

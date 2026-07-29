@@ -29,8 +29,30 @@ def health():
 
 @app.post("/api/upload_resume")
 async def upload_resume(file: UploadFile = File(...)):
-    """上传简历文件，返回提取的纯文本。"""
-    content = await file.read()
+    """上传简历文件，返回提取的纯文本。
+
+    安全：限制大小 5MB；校验扩展名；对 PDF 校验文件头魔数 %PDF，防改名绕过。
+    """
+    MAX_SIZE = 5 * 1024 * 1024  # 5MB
+    ALLOWED_EXT = {".pdf", ".docx", ".txt"}
+    name = (file.filename or "").lower()
+    if not any(name.endswith(ext) for ext in ALLOWED_EXT):
+        raise HTTPException(415, "仅支持 PDF / DOCX / TXT")
+    # 流式读取并限制大小，避免大文件撑爆内存
+    chunks = []
+    total = 0
+    while True:
+        chunk = await file.read(64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_SIZE:
+            raise HTTPException(413, f"文件过大，上限 {MAX_SIZE // 1024 // 1024}MB")
+        chunks.append(chunk)
+    content = b"".join(chunks)
+    # PDF 魔数校验，防把可执行/任意文件改名 .pdf 绕过
+    if name.endswith(".pdf") and not content.startswith(b"%PDF"):
+        raise HTTPException(415, "文件不是有效的 PDF")
     text = parser.extract_text_from_file(file.filename, content)
     return {"filename": file.filename, "text": text}
 
@@ -77,7 +99,7 @@ def opening(session_id: str):
             for ev in s.stream_reply(None):
                 yield _sse(ev)
         except Exception as e:
-            yield _sse({"type": "error", "message": str(e)})
+            yield _sse({"type": "error", "message": "面试官服务暂时不可用，请稍后重试"})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -94,7 +116,7 @@ def chat(req: ChatRequest):
             for ev in s.stream_reply(req.message):
                 yield _sse(ev)
         except Exception as e:
-            yield _sse({"type": "error", "message": str(e)})
+            yield _sse({"type": "error", "message": "面试官服务暂时不可用，请稍后重试"})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -112,7 +134,7 @@ def submit_code(req: CodeSubmitRequest):
             for ev in s.stream_reply(msg):
                 yield _sse(ev)
         except Exception as e:
-            yield _sse({"type": "error", "message": str(e)})
+            yield _sse({"type": "error", "message": "面试官服务暂时不可用，请稍后重试"})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 

@@ -8,12 +8,16 @@ import json
 import os
 import time
 import uuid
+import threading
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
 
 # 最大保留条数，避免无限增长
 MAX_RECORDS = 200
+
+# 串行化文件写操作，防止并发互相覆盖
+_WRITE_LOCK = threading.Lock()
 
 
 def _ensure_file():
@@ -36,8 +40,17 @@ def _write_all(records):
     _ensure_file()
     # 仅保留最新 MAX_RECORDS 条
     records = records[-MAX_RECORDS:]
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(records, f, ensure_ascii=False, indent=2)
+    # 原子写：先写临时文件再 os.replace，避免崩溃/并发导致 JSON 损坏丢全部历史
+    tmp = HISTORY_FILE + ".tmp"
+    with _WRITE_LOCK:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, HISTORY_FILE)
 
 
 def save_record(record: dict) -> str:

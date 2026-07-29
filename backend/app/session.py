@@ -10,6 +10,7 @@ import uuid
 import json
 import time
 import re
+import threading
 from typing import Iterator, Optional
 
 from . import llm, prompts, personas, parser
@@ -50,6 +51,8 @@ class Session:
         self.report_text = ""                    # 完整报告 markdown
         self.abandoned = False
         self._saved = False                      # 历史是否已落盘
+        self._lock = threading.Lock()            # 串行化同一会话的并发请求，防止状态竞争
+        self._report_done = False                # 报告是否已生成（防重入）
 
     # ---------- system prompt 构造 ----------
     def _system_prompt(self) -> str:
@@ -156,7 +159,14 @@ class Session:
 
     # ---------- 对外：流式对话 ----------
     def stream_reply(self, user_message: Optional[str]) -> Iterator[dict]:
-        """产出事件字典：token / stage / problem / report_start / done。"""
+        """产出事件字典：token / stage / problem / report_start / done。
+
+        全程持有 self._lock，串行化同一会话的并发请求，防止 history/stage 竞争。
+        """
+        with self._lock:
+            yield from self._stream_reply_locked(user_message)
+
+    def _stream_reply_locked(self, user_message: Optional[str]) -> Iterator[dict]:
         if user_message:
             self.history.append({"role": "user", "content": user_message})
             prompt_input = None  # 已写入 history
@@ -216,9 +226,10 @@ class Session:
         }}
 
     def _generate_report(self) -> Iterator[dict]:
-        # 防止重复生成报告（兜底强制推进可能再次触发）
-        if self.stage == Stage.FINISHED:
+        # 防止重复生成报告（兜底强制推进/客户端重连可能再次触发）
+        if self._report_done or self.stage == Stage.FINISHED:
             return
+        self._report_done = True
         transcript = "\n".join(
             f"{'候选人' if m['role'] == 'user' else '面试官'}：{m['content']}"
             for m in self.history
@@ -250,9 +261,11 @@ class Session:
                 total = int(m.group(1))
             except ValueError:
                 total = None
-        v = re.search(r"推荐结论[：:]\s*(通过|待定|不通过)", text)
+        v = re.search(r"推荐结论[：:]?\s*(通过|待定|不通过)", text)
         if not v:
-            v = re.search(r"(通过|待定|不通过)", text)
+            # 仅在报告开头 250 字内兜底搜索，避免命中正文里「通过该项目…」等误报
+            head = text[:250]
+            v = re.search(r"(?:是否通过|结论|判定)[^：:]*[：:]?\s*(通过|待定|不通过)", head)
         if v:
             verdict = v.group(1)
         return total, verdict
