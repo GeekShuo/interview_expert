@@ -275,6 +275,7 @@ function resumeInterview(st) {
   if (st.stage === "coding" && st.current_problem) {
     state.currentProblem = st.current_problem;
     $("problemTitle").textContent = `${st.current_problem.title}（${st.current_problem.difficulty}）`;
+    $("problemStatement").innerHTML = safeMd(st.current_problem.statement || "");
     setStage("coding");
   } else {
     setStage(st.stage);
@@ -591,6 +592,7 @@ $("langSelect").addEventListener("change", (e) => {
 function renderProblem(p) {
   state.currentProblem = p;
   $("problemTitle").textContent = `${p.title}（${p.difficulty}）`;
+  $("problemStatement").innerHTML = safeMd(p.statement || "");
   showCodePane();
   const lang = $("langSelect").value;
   if (state.editor) state.editor.setValue(starterCode(lang));
