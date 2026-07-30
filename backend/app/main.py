@@ -169,6 +169,7 @@ def state(session_id: str):
         "jd": {"title": s.jd.get("title"), "requirements": s.jd.get("requirements")},
         "resume_summary": s.resume.get("summary"),
         "mode": s.mode,
+        "style": s.style,
         "stages": [{"key": st.value, "label": STAGE_LABELS[st]} for st in s.stage_flow],
         "history": s.public_history(),
         "current_problem": None if not p else {

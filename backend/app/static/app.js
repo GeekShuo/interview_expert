@@ -8,7 +8,11 @@ const state = {
   mode: "full", // 完整面试 | coding/quiz/project 定向练习
   style: "strict", // strict 专业严谨 | warm 温和鼓励 | pressure 高压实战
   report: "", // 当前/查看中的报告 markdown（用于导出）
+  abort: null, // 当前进行中流式请求的 AbortController（用于「停止」按钮中断）
 };
+
+// 是否移动端（小屏或触摸设备）：用于决定是否自动聚焦编辑器、避免键盘遮挡
+const isTouch = window.matchMedia("(max-width: 768px), (pointer: coarse)").matches;
 
 const $ = (id) => document.getElementById(id);
 
@@ -374,38 +378,49 @@ function scrollBottom() {
 }
 
 // ============ SSE 流式核心 ============
-async function streamSSE(url, options, { onToken, onReport, onStage, onProblem, onJudge }) {
-  const res = await fetch(url, options);
+async function streamSSE(url, options, { onToken, onReport, onStage, onProblem, onJudge }, signal) {
+  let res;
+  try {
+    res = await fetch(url, { ...options, signal });
+  } catch (e) {
+    if (e && e.name === "AbortError") return; // 用户主动停止，正常结束
+    throw e;
+  }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.indexOf("\n\n")) !== -1) {
-      const chunk = buf.slice(0, idx).trim();
-      buf = buf.slice(idx + 2);
-      if (!chunk.startsWith("data:")) continue;
-      let ev;
-      try { ev = JSON.parse(chunk.slice(5).trim()); }
-      catch { continue; } // 跳过无法解析的片段，避免整条流崩溃
-      if (ev.type === "token") {
-        if (ev.channel === "report") onReport && onReport(ev.text);
-        else onToken && onToken(ev.text);
-      } else if (ev.type === "stage") {
-        onStage && onStage(ev);
-      } else if (ev.type === "problem") {
-        onProblem && onProblem(ev.problem);
-      } else if (ev.type === "judge") {
-        onJudge && onJudge(ev.result);
-      } else if (ev.type === "report_start") {
-        onReport && onReport("", true);
-      } else if (ev.type === "error") {
-        onToken && onToken("\n\n[出错] " + ev.message);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const chunk = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!chunk.startsWith("data:")) continue;
+        let ev;
+        try { ev = JSON.parse(chunk.slice(5).trim()); }
+        catch { continue; } // 跳过无法解析的片段，避免整条流崩溃
+        if (ev.type === "token") {
+          if (ev.channel === "report") onReport && onReport(ev.text);
+          else onToken && onToken(ev.text);
+        } else if (ev.type === "stage") {
+          onStage && onStage(ev);
+        } else if (ev.type === "problem") {
+          onProblem && onProblem(ev.problem);
+        } else if (ev.type === "judge") {
+          onJudge && onJudge(ev.result);
+        } else if (ev.type === "report_start") {
+          onReport && onReport("", true);
+        } else if (ev.type === "error") {
+          onToken && onToken("\n\n[出错] " + ev.message);
+        }
       }
     }
+  } catch (e) {
+    if (e && e.name === "AbortError") { try { reader.cancel().catch(() => {}); } catch (_) {} return; } // 流读取中被中断，正常结束
+    throw e;
   }
 }
 
@@ -416,6 +431,8 @@ async function streamOpening() {
   let acc = "";
   const spk = makeSpeaker(voiceOut);
   state.streaming = true;
+  state.abort = new AbortController();
+  $("stopBtn").classList.remove("hidden");
   try {
     await streamSSE("/api/opening?session_id=" + state.sessionId, { method: "GET" }, {
       onToken: (t) => {
@@ -427,12 +444,16 @@ async function streamOpening() {
       onStage: (ev) => setStage(ev.stage),
       onProblem: (p) => renderProblem(p),
       onReport: handleReportToken,
-    });
+    }, state.abort.signal);
   } catch (e) {
-    inner.innerHTML = safeMd(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+    if (!(e && e.name === "AbortError")) {
+      inner.innerHTML = safeMd(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+    }
   } finally {
     inner.parentElement.classList.remove("cursor-blink");
     state.streaming = false;
+    $("stopBtn").classList.add("hidden");
+    state.abort = null;
   }
   if (voiceMode) spk.finish(startListeningTurn);
 }
@@ -443,6 +464,15 @@ $("userInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
+  }
+});
+
+// 停止当前正在进行的流式生成（开场白 / 面试官回复）
+$("stopBtn").addEventListener("click", () => {
+  if (state.abort) {
+    state.abort.abort();
+    voiceOut.cancel(); // 停掉残留朗读
+    addSystemNote("⏹ 已停止生成");
   }
 });
 
@@ -464,6 +494,8 @@ async function sendMessage() {
   let acc = "";
   const spk = makeSpeaker(voiceOut);
   state.streaming = true;
+  state.abort = new AbortController();
+  $("stopBtn").classList.remove("hidden");
   $("sendBtn").disabled = true;
   try {
     await streamSSE("/api/chat", {
@@ -475,13 +507,17 @@ async function sendMessage() {
       onStage: (ev) => { addSystemNote("进入环节：" + ev.label); setStage(ev.stage); },
       onProblem: (p) => renderProblem(p),
       onReport: handleReportToken,
-    });
+    }, state.abort.signal);
   } catch (e) {
-    inner.innerHTML = safeMd(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+    if (!(e && e.name === "AbortError")) {
+      inner.innerHTML = safeMd(acc + "\n\n[连接出错] " + (e && e.message ? e.message : e));
+    }
   } finally {
     inner.parentElement.classList.remove("cursor-blink");
     state.streaming = false;
+    $("stopBtn").classList.add("hidden");
     $("sendBtn").disabled = false;
+    state.abort = null;
   }
   if (voiceMode) spk.finish(startListeningTurn);
 }
@@ -510,8 +546,11 @@ function showCodePane() {
         minimap: { enabled: false },
         automaticLayout: true,
         scrollBeyondLastLine: false,
+        fixedOverflowWidgets: true,
+        wordWrap: "on",
+        scrollbar: { useShadows: false, verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
       });
-      focusEditor();
+      if (!isTouch) focusEditor(); // 移动端不自动聚焦，避免键盘弹出遮挡代码区
     });
   }
 }

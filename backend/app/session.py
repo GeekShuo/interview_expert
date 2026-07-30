@@ -344,10 +344,17 @@ class Session:
     def _parse_score(text: str):
         total = None
         verdict = None
-        m = re.search(r"总分[：:]\s*(\d{1,3})\s*/\s*100", text)
+        # 兼容多种写法：总分:85、总分 85/100、得分85分、综合评分 85、85/100
+        m = re.search(r"(?:总分|得分|综合评分)[：:]?\s*(\d{1,3})(?:\s*/\s*100)?", text)
+        if not m:
+            m = re.search(r"(?:评分|成绩|得分)\D{0,4}(\d{1,3})\s*分", text)
+        if not m:
+            m = re.search(r"\b(\d{1,3})\s*/\s*100\b", text)
         if m:
             try:
                 total = int(m.group(1))
+                if total > 100:
+                    total = None
             except ValueError:
                 total = None
         v = re.search(r"推荐结论[：:]?\s*(通过|待定|不通过)", text)
@@ -363,7 +370,7 @@ class Session:
     def _parse_dimensions(text: str) -> dict:
         """从报告「分项评分」中解析各维度分数（x/5），用于跨场成长画像。"""
         dims = {}
-        for m in re.finditer(r"\*\*([^*\n]{2,14})\*\*[：:]\s*(\d(?:\.\d)?)\s*/\s*5", text):
+        for m in re.finditer(r"\*\*([^*\n]{2,24})\*\*[：:]\s*(\d(?:\.\d)?)\s*/\s*5", text):
             name = m.group(1).strip()
             try:
                 dims[name] = float(m.group(2))
@@ -400,9 +407,12 @@ class Session:
             "dimensions": self.dimensions,
             "judge_passed": sum(j.get("passed") or 0 for j in self.judge_results),
             "judge_total": sum(j.get("total") or 0 for j in self.judge_results),
-            "weak_tags": sorted({t for j in self.judge_results
-                                 if (j.get("total") or 0) > (j.get("passed") or 0)
-                                 for t in j.get("tags", [])}),
+            "weak_tags": sorted(
+                {t for j in self.judge_results
+                 if (j.get("total") or 0) > (j.get("passed") or 0)
+                 for t in j.get("tags", [])}
+                | {n.split("（")[0].strip() for n, s in self.dimensions.items() if s < 3.0}
+            ),
             "report": self.report_text,
             "transcript": transcript,
         }
