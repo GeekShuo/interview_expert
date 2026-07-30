@@ -111,13 +111,13 @@
         <button id="historyBtn" class="text-xs text-slate-300 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">📚 历史</button>
         <label id="voiceModeLabel" class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-brand-500 transition" title="开启后：面试官自动朗读，读完自动开麦听你回答，静音自动发送">
           <input type="checkbox" id="voiceModeToggle" class="accent-brand-500" />
-          <span>🎙️ 语音模式</span>
+          <span>🎙️ <span class="hidden sm:inline">语音模式</span></span>
         </label>
         <button id="restartBtn" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">重新开始</button>
       </div>
     </header>
 
-    <div class="flex-1 flex flex-col md:flex-row overflow-hidden">
+    <div class="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
       <!-- 左：对话 -->
       <section id="chatPane" class="flex-1 flex flex-col min-w-0 min-h-0">
         <div id="messages" class="flex-1 overflow-y-auto px-5 py-6 space-y-5"></div>
@@ -134,7 +134,7 @@
       </section>
 
       <!-- 右：代码面板（算法环节显示） -->
-      <section id="codePane" class="w-full md:w-[46%] h-[46vh] md:h-auto border-t md:border-t-0 md:border-l border-white/5 flex-col hidden min-h-0">
+      <section id="codePane" class="w-full md:w-[46%] h-[42vh] md:h-auto shrink-0 md:shrink border-t md:border-t-0 md:border-l border-white/5 flex-col hidden min-h-0">
         <div class="flex items-center justify-between px-4 py-2.5 border-b border-white/5 bg-ink-800/60">
           <div class="flex items-center gap-2 min-w-0">
             <span class="text-xs font-medium text-brand-100 shrink-0">💻 代码区</span>
@@ -159,7 +159,7 @@
 
   <!-- ============ 报告弹层 ============ -->
   <div id="reportModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm hidden items-center justify-center p-4 md:p-6 z-50">
-    <div class="bg-ink-800 rounded-2xl border border-white/10 max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl">
+    <div class="modal-card bg-ink-800 rounded-2xl border border-white/10 max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl">
       <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
         <h2 class="font-bold text-lg">📋 面试评估报告</h2>
         <button id="closeReport" class="text-slate-400 hover:text-white text-xl leading-none">×</button>
@@ -177,7 +177,7 @@
 
   <!-- ============ 历史面试弹层 ============ -->
   <div id="historyModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm hidden items-center justify-center p-4 md:p-6 z-50">
-    <div class="bg-ink-800 rounded-2xl border border-white/10 max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl">
+    <div class="modal-card bg-ink-800 rounded-2xl border border-white/10 max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl">
       <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
         <h2 class="font-bold text-lg">📚 历史面试</h2>
         <button id="closeHistory" class="text-slate-400 hover:text-white text-xl leading-none">×</button>

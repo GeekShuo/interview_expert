@@ -74,7 +74,7 @@ body {
   background-attachment: fixed;
 }
 ::selection { background: rgba(79,110,247,.35); color: #fff; }
-*:focus-visible { outline: 2px solid #4f6ef7; outline-offset: 2px; border-radius: 6px; }
+*:focus-visible:not(input):not(textarea):not(select) { outline: 2px solid #4f6ef7; outline-offset: 2px; border-radius: 6px; }
 button, .mode-pill, select {
   transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease, transform .08s ease, color .15s ease;
 }
@@ -95,4 +95,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
   ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.26); background-clip: padding-box; }
+}
+/* 移动端：工作台长文本域限高，避免开始按钮沉底 */
+@media (max-width: 767px) {
+  #resumeText, #jdText { height: 7rem; }
 }

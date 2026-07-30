@@ -245,7 +245,7 @@ function resumeInterview(st) {
   addSystemNote("已恢复上次面试，继续加油！");
   (st.history || []).forEach((m) => {
     if (m.role === "user") renderUserMessage(m.content);
-    else addMessage("assistant").innerHTML = safeMd(m.content);
+    else addMessage("assistant", false).innerHTML = safeMd(m.content);
   });
   // 恢复代码面板（不重复插入判题提示）
   if (st.stage === "coding" && st.current_problem) {
@@ -313,9 +313,9 @@ function setStage(stageKey) {
 }
 
 // ============ 消息渲染 ============
-function addMessage(role) {
+function addMessage(role, animate = true) {
   const wrap = document.createElement("div");
-  wrap.className = "flex " + (role === "user" ? "justify-end" : "justify-start") + " msg-anim";
+  wrap.className = "flex " + (role === "user" ? "justify-end" : "justify-start") + (animate ? " msg-anim" : "");
   const bubble = document.createElement("div");
   bubble.className =
     "bubble max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed " +
@@ -690,7 +690,7 @@ function openReport() {
   const modal = $("reportModal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
-  const card = modal.querySelector(":scope > div");
+  const card = modal.querySelector(".modal-card");
   card.classList.remove("modal-anim"); void card.offsetWidth; card.classList.add("modal-anim");
 }
 $("closeReport").addEventListener("click", () => {
@@ -705,7 +705,7 @@ function openHistory() {
   const modal = $("historyModal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
-  const card = modal.querySelector(":scope > div");
+  const card = modal.querySelector(".modal-card");
   card.classList.remove("modal-anim"); void card.offsetWidth; card.classList.add("modal-anim");
   loadHistory();
 }
