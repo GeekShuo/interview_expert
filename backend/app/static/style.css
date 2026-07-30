@@ -60,3 +60,39 @@
   0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,.45); }
   50%     { box-shadow: 0 0 0 7px rgba(16,185,129,0); }
 }
+
+/* ============ Phase 4 视觉打磨 ============ */
+html { scroll-behavior: smooth; }
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  background-color: #0f1222;
+  background-image:
+    radial-gradient(900px circle at 12% -8%, rgba(79,110,247,.18), transparent 45%),
+    radial-gradient(800px circle at 100% 0%, rgba(99,102,241,.12), transparent 40%);
+  background-attachment: fixed;
+}
+::selection { background: rgba(79,110,247,.35); color: #fff; }
+*:focus-visible { outline: 2px solid #4f6ef7; outline-offset: 2px; border-radius: 6px; }
+button, .mode-pill, select {
+  transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease, transform .08s ease, color .15s ease;
+}
+button:active:not(:disabled) { transform: translateY(1px); }
+.card-hover { transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
+.card-hover:hover { border-color: rgba(79,110,247,.35); box-shadow: 0 12px 48px -14px rgba(79,110,247,.30); }
+/* 消息入场动画 */
+.msg-anim { animation: msgIn .28s cubic-bezier(.22,.61,.36,1) both; }
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* 弹层内容淡入 */
+.modal-anim { animation: modalIn .22s ease-out both; }
+@keyframes modalIn { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: scale(1); } }
+/* 更细腻的滚动条（桌面） */
+@media (pointer: fine) {
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.26); background-clip: padding-box; }
+}

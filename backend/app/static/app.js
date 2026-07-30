@@ -315,7 +315,7 @@ function setStage(stageKey) {
 // ============ 消息渲染 ============
 function addMessage(role) {
   const wrap = document.createElement("div");
-  wrap.className = "flex " + (role === "user" ? "justify-end" : "justify-start");
+  wrap.className = "flex " + (role === "user" ? "justify-end" : "justify-start") + " msg-anim";
   const bubble = document.createElement("div");
   bubble.className =
     "bubble max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed " +
@@ -687,8 +687,11 @@ function renderReportScore(text) {
 }
 
 function openReport() {
-  $("reportModal").classList.remove("hidden");
-  $("reportModal").classList.add("flex");
+  const modal = $("reportModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  const card = modal.querySelector(":scope > div");
+  card.classList.remove("modal-anim"); void card.offsetWidth; card.classList.add("modal-anim");
 }
 $("closeReport").addEventListener("click", () => {
   $("reportModal").classList.add("hidden");
@@ -702,6 +705,8 @@ function openHistory() {
   const modal = $("historyModal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
+  const card = modal.querySelector(":scope > div");
+  card.classList.remove("modal-anim"); void card.offsetWidth; card.classList.add("modal-anim");
   loadHistory();
 }
 function closeHistory() {
