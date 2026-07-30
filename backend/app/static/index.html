@@ -33,7 +33,28 @@
         </div>
       </div>
 
-      <div class="grid md:grid-cols-2 gap-5 mt-6">
+      <!-- 模式选择：完整面试 / 定向练习 -->
+      <div class="mt-6">
+        <label class="block text-sm font-medium text-slate-300 mb-2">🎛 练习模式</label>
+        <div id="modePills" role="radiogroup" aria-label="练习模式" class="flex flex-wrap gap-2 text-sm">
+          <button type="button" role="radio" aria-pressed="true" data-mode="full" class="mode-pill px-4 py-2 rounded-lg border transition border-brand-500 bg-brand-500/20 text-brand-100">🎯 完整面试</button>
+          <button type="button" role="radio" aria-pressed="false" data-mode="coding" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">💻 只练手撕代码</button>
+          <button type="button" role="radio" aria-pressed="false" data-mode="quiz" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">📖 只练专业八股</button>
+          <button type="button" role="radio" aria-pressed="false" data-mode="project" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">🗂 只练项目深挖</button>
+        </div>
+        <div id="difficultyRow" class="hidden mt-3 flex items-center gap-2 text-sm">
+          <span class="text-slate-400 text-xs">题目难度</span>
+          <select id="difficultySelect" class="bg-ink-700 text-xs rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:border-brand-500">
+            <option value="">随机（中等为主）</option>
+            <option value="简单">简单</option>
+            <option value="中等">中等</option>
+            <option value="困难">困难</option>
+          </select>
+        </div>
+        <div id="directedNote" class="hidden mt-3 text-xs text-slate-500">💡 定向练习可不填简历 / JD，直接开始即可（会匹配对应环节的面试官）</div>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-5 mt-5">
         <div>
           <label class="block text-sm font-medium text-slate-300 mb-2">📄 简历</label>
           <label class="flex items-center justify-center gap-2 h-11 rounded-lg border border-dashed border-white/15 bg-ink-700/50 cursor-pointer hover:border-brand-500 transition text-sm text-slate-300 mb-2">
@@ -163,6 +184,7 @@
       </div>
       <div class="overflow-y-auto">
         <div id="historyStats" class="hidden px-6 pt-5"></div>
+        <div id="mistakesBox" class="hidden px-6 pt-4"></div>
         <div id="historyList" class="px-6 py-5 space-y-3"></div>
       </div>
     </div>

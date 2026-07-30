@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from . import session as sess
 from . import parser
 from . import history as history_store
+from . import mistakes as mistakes_store
 from .config import settings
 from .schemas import ChatRequest, CodeSubmitRequest, STAGE_LABELS
 from .schemas import Stage
@@ -62,16 +63,29 @@ async def start_interview(
     resume_text: str = Form(""),
     jd_text: str = Form(""),
     previous_session_id: str = Form(""),
+    mode: str = Form("full"),
+    difficulty: str = Form(""),
+    problem_id: str = Form(""),
 ):
-    """创建面试会话，返回会话信息（面试官、岗位等）。
+    """创建面试会话（完整面试或定向练习）。
 
-    previous_session_id：若传入且对应会话尚未完成，则将其标记为「未完成」并写入历史。
+    - mode: full / coding / quiz / project
+    - difficulty: 简单 / 中等 / 困难（coding 定向练习可选）
+    - problem_id: 指定第一道算法题（错题重练）
+    - previous_session_id: 若传入且对应会话未完成，则标记「未完成」写入历史。
     """
     if previous_session_id:
         prev = sess.get_session(previous_session_id)
         if prev is not None and prev.stage != Stage.FINISHED:
             prev.abandon()
-    s = sess.create_session(resume_text, jd_text)
+    if mode not in sess.MODE_FLOWS:
+        mode = "full"
+    # 定向练习允许不填简历/JD，用占位文本保证 prompt 完整
+    if mode != "full":
+        resume_text = resume_text.strip() or "（定向练习模式，候选人未提供简历，请勿追问简历细节）"
+        jd_text = jd_text.strip() or "算法工程师（定向练习）"
+    s = sess.create_session(resume_text, jd_text, mode=mode,
+                            difficulty=difficulty or None, problem_id=problem_id or None)
     return {
         "session_id": s.id,
         "persona": s.persona,
@@ -79,10 +93,8 @@ async def start_interview(
         "resume_summary": s.resume.get("summary"),
         "stage": s.stage.value,
         "stage_label": STAGE_LABELS[s.stage],
-        "stages": [
-            {"key": st.value, "label": STAGE_LABELS[st]}
-            for st in [Stage.GREETING, Stage.PROJECT, Stage.CODING, Stage.QUIZ, Stage.REPORT]
-        ],
+        "mode": s.mode,
+        "stages": [{"key": st.value, "label": STAGE_LABELS[st]} for st in s.stage_flow],
         "llm_ready": settings.llm_ready,
     }
 
@@ -153,10 +165,8 @@ def state(session_id: str):
         "persona": s.persona,
         "jd": {"title": s.jd.get("title"), "requirements": s.jd.get("requirements")},
         "resume_summary": s.resume.get("summary"),
-        "stages": [
-            {"key": st.value, "label": STAGE_LABELS[st]}
-            for st in [Stage.GREETING, Stage.PROJECT, Stage.CODING, Stage.QUIZ, Stage.REPORT]
-        ],
+        "mode": s.mode,
+        "stages": [{"key": st.value, "label": STAGE_LABELS[st]} for st in s.stage_flow],
         "history": s.public_history(),
         "current_problem": None if not p else {
             "id": p["id"], "title": p["title"], "difficulty": p["difficulty"],
@@ -192,6 +202,21 @@ def delete_history(record_id: str):
     ok = history_store.delete_record(record_id)
     if not ok:
         raise HTTPException(404, "记录不存在")
+    return {"ok": True}
+
+
+# ---------- 错题本 ----------
+@app.get("/api/mistakes")
+def list_mistakes():
+    """错题本：自动判题未全通过的题（全通过后自动消灭）。"""
+    return {"mistakes": mistakes_store.list_mistakes()}
+
+
+@app.delete("/api/mistakes/{problem_id}")
+def delete_mistake(problem_id: str):
+    ok = mistakes_store.delete_mistake(problem_id)
+    if not ok:
+        raise HTTPException(404, "错题不存在")
     return {"ok": True}
 
 

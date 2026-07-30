@@ -14,7 +14,7 @@ import re
 import threading
 from typing import Iterator, Optional
 
-from . import llm, prompts, personas, parser, runner
+from . import llm, prompts, personas, parser, runner, mistakes
 from . import history as history_store
 from .problems import pick_problem
 from .questions import pick_questions
@@ -22,6 +22,16 @@ from .schemas import Stage, STAGE_LABELS, STAGE_ORDER
 
 # 进行中会话的落盘目录：服务重启后仍可恢复未完成的面试
 LIVE_DIR = os.path.join(history_store.DATA_DIR, "live_sessions")
+
+# 面试模式 → 阶段流程（定向练习只走对应环节 + 报告）
+MODE_FLOWS = {
+    "full": STAGE_ORDER,
+    "coding": [Stage.CODING, Stage.REPORT],
+    "quiz": [Stage.QUIZ, Stage.REPORT],
+    "project": [Stage.PROJECT, Stage.REPORT],
+}
+MODE_LABELS = {"full": "完整面试", "coding": "只练手撕代码",
+               "quiz": "只练专业八股", "project": "只练项目深挖"}
 
 # 每个环节允许的最大「候选人发言轮次」，超过则强制推进，避免面试卡死
 STAGE_TURN_LIMITS = {
@@ -33,12 +43,16 @@ STAGE_TURN_LIMITS = {
 
 
 class Session:
-    def __init__(self, resume_text: str, jd_text: str):
+    def __init__(self, resume_text: str, jd_text: str, mode: str = "full",
+                 difficulty: Optional[str] = None, problem_id: Optional[str] = None):
         self.id = uuid.uuid4().hex[:12]
+        self.mode = mode if mode in MODE_FLOWS else "full"
+        self.difficulty = difficulty if difficulty in {"简单", "中等", "困难"} else None
+        self.requested_problem_id = problem_id or None  # 错题重练：指定第一题
         self.jd = parser.parse_jd(jd_text)
         self.resume = parser.parse_resume(resume_text)
         self.persona = personas.assign_persona(jd_text + " " + self.jd.get("full_text", ""))
-        self.stage: Stage = Stage.GREETING
+        self.stage: Stage = self.stage_flow[0]
         self.history: list[dict] = []          # [{role, content}] 仅可见对话
         self.memo: list[str] = []              # 面试官隐藏笔记
         self.used_problem_ids: list[str] = []
@@ -60,6 +74,16 @@ class Session:
         self._lock = threading.Lock()            # 串行化同一会话的并发请求，防止状态竞争
         self._report_done = False                # 报告是否已生成（防重入）
 
+    @property
+    def stage_flow(self) -> list:
+        return MODE_FLOWS.get(self.mode, STAGE_ORDER)
+
+    def _pick(self) -> dict:
+        """按难度/指定题抽题（指定题只生效一次）。"""
+        p = pick_problem(self.used_problem_ids, self.difficulty, self.requested_problem_id)
+        self.requested_problem_id = None
+        return p
+
     # ---------- system prompt 构造 ----------
     def _system_prompt(self) -> str:
         if self.stage == Stage.GREETING:
@@ -70,7 +94,7 @@ class Session:
             )
         if self.stage == Stage.CODING:
             if self.current_problem is None:
-                self.current_problem = pick_problem(self.used_problem_ids)
+                self.current_problem = self._pick()
                 self.used_problem_ids.append(self.current_problem["id"])
             return prompts.coding_prompt(self.persona, self.current_problem, self.coding_phase)
         if self.stage == Stage.QUIZ:
@@ -122,11 +146,12 @@ class Session:
 
     # ---------- 阶段转移 ----------
     def _advance_stage(self):
-        idx = STAGE_ORDER.index(self.stage)
+        flow = self.stage_flow
+        idx = flow.index(self.stage) if self.stage in flow else len(flow) - 1
         self.progress.append({"stage": self.stage.value, "label": STAGE_LABELS[self.stage]})
         self.stage_turns = 0
-        if idx + 1 < len(STAGE_ORDER):
-            self.stage = STAGE_ORDER[idx + 1]
+        if idx + 1 < len(flow):
+            self.stage = flow[idx + 1]
         else:
             self.stage = Stage.FINISHED
         if self.stage == Stage.CODING:
@@ -184,6 +209,7 @@ class Session:
                 summary = runner.summarize_for_llm(judge_result)
                 self.judge_results.append({
                     "problem": self.current_problem["title"],
+                    "problem_id": self.current_problem["id"],
                     "tags": self.current_problem.get("tags", []),
                     "difficulty": self.current_problem.get("difficulty", ""),
                     "supported": judge_result.get("supported", False),
@@ -208,6 +234,12 @@ class Session:
             if self.stage in STAGE_TURN_LIMITS:
                 self.stage_turns += 1
         else:
+            # 定向练习「只练代码」：开场即出题，不走寒暄
+            if self.stage == Stage.CODING and self.current_problem is None:
+                yield from self._auto_present_problem()
+                self._persist_live()
+                yield {"type": "done"}
+                return
             prompt_input = "（面试开始，请你作为面试官开场）"  # 开场触发
 
         gen = self._stream_llm(prompt_input)
@@ -245,7 +277,7 @@ class Session:
 
     def _auto_present_problem(self) -> Iterator[dict]:
         """进入 coding 环节后自动出题。"""
-        self.current_problem = pick_problem(self.used_problem_ids)
+        self.current_problem = self._pick()
         self.used_problem_ids.append(self.current_problem["id"])
         self.coding_phase = "present"
         gen = self._stream_llm("（请正式把这道算法题出给候选人，题面展示清楚）")
@@ -271,6 +303,10 @@ class Session:
             f"{'候选人' if m['role'] == 'user' else '面试官'}：{m['content']}"
             for m in self.history
         )
+        if self.mode != "full":
+            transcript = (f"（注意：本场为定向练习模式「{MODE_LABELS.get(self.mode, '')}」，"
+                          f"只进行了对应环节，未考察的维度请标注「本场未考察」，不要臆测打分）\n"
+                          + transcript)
         memo_text = "\n".join(self.memo) or "（无）"
         judge_text = "\n".join(
             f"- 《{j['problem']}》（难度:{j.get('difficulty', '?')}，"
@@ -292,6 +328,11 @@ class Session:
         self.finished_at = time.time()
         self._save_history()
         self._delete_live()  # 已完成：不再需要恢复快照
+        # 错题本：未全通过的题记入，全通过的自动消灭
+        try:
+            mistakes.record_session_results(self.judge_results)
+        except Exception:
+            pass
         yield {"type": "stage", "stage": self.stage.value, "label": STAGE_LABELS[self.stage]}
 
     # ---------- 评分解析与历史落盘 ----------
@@ -377,6 +418,11 @@ class Session:
             return
         self.abandoned = True
         self._save_history(abandoned=True)
+        # 中途放弃也要把做错的算法题写入错题本，否则错题本核心闭环在放弃场景失效
+        try:
+            mistakes.record_session_results(self.judge_results)
+        except Exception:
+            pass
         self._delete_live()
 
     # ---------- 进行中会话的快照持久化（服务重启后可恢复） ----------
@@ -384,7 +430,8 @@ class Session:
         "id", "jd", "resume", "persona", "history", "memo", "used_problem_ids",
         "current_problem", "quiz_pool", "coding_phase", "progress", "stage_turns",
         "started_at", "finished_at", "score", "verdict", "report_text",
-        "abandoned", "judge_results", "dimensions",
+        "abandoned", "judge_results", "dimensions", "mode", "difficulty",
+        "requested_problem_id",
     ]
 
     def snapshot(self) -> dict:
@@ -397,6 +444,8 @@ class Session:
         s = cls.__new__(cls)
         for k in cls._SNAP_FIELDS:
             setattr(s, k, data.get(k))
+        if s.mode not in MODE_FLOWS:  # 兼容旧快照
+            s.mode = "full"
         s.stage = Stage(data["stage"])
         s._saved = False
         s._lock = threading.Lock()
@@ -430,8 +479,10 @@ class Session:
 _SESSIONS: dict[str, Session] = {}
 
 
-def create_session(resume_text: str, jd_text: str) -> Session:
-    s = Session(resume_text, jd_text)
+def create_session(resume_text: str, jd_text: str, mode: str = "full",
+                   difficulty: Optional[str] = None,
+                   problem_id: Optional[str] = None) -> Session:
+    s = Session(resume_text, jd_text, mode=mode, difficulty=difficulty, problem_id=problem_id)
     _SESSIONS[s.id] = s
     s._persist_live()
     return s

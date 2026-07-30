@@ -5,6 +5,7 @@ const state = {
   currentStage: null,
   editor: null,
   streaming: false,
+  mode: "full", // 完整面试 | coding/quiz/project 定向练习
 };
 
 const $ = (id) => document.getElementById(id);
@@ -117,10 +118,32 @@ $("resumeFile").addEventListener("change", async (e) => {
 
 $("startBtn").addEventListener("click", startInterview);
 
-async function startInterview() {
+// ============ 练习模式选择（完整 / 定向练习）============
+function selectMode(mode) {
+  state.mode = mode;
+  document.querySelectorAll(".mode-pill").forEach((b) => {
+    const on = b.dataset.mode === mode;
+    b.classList.toggle("border-brand-500", on);
+    b.classList.toggle("bg-brand-500/20", on);
+    b.classList.toggle("text-brand-100", on);
+    b.classList.toggle("border-white/10", !on);
+    b.classList.toggle("text-slate-400", !on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  $("difficultyRow").classList.toggle("hidden", mode !== "coding");
+  $("directedNote").classList.toggle("hidden", mode === "full");
+}
+document.querySelectorAll(".mode-pill").forEach((btn) => {
+  btn.addEventListener("click", () => selectMode(btn.dataset.mode));
+});
+
+async function startInterview(overrides = {}) {
   const resumeText = $("resumeText").value.trim();
   const jdText = $("jdText").value.trim();
-  if (!jdText) {
+  const mode = overrides.mode || state.mode || "full";
+  const difficulty = overrides.difficulty || $("difficultySelect")?.value || "";
+  const problemId = overrides.problemId || "";
+  if (mode === "full" && !jdText) {
     showHint("请至少填写目标岗位 JD");
     return;
   }
@@ -130,6 +153,9 @@ async function startInterview() {
   const fd = new FormData();
   fd.append("resume_text", resumeText);
   fd.append("jd_text", jdText);
+  fd.append("mode", mode);
+  if (difficulty) fd.append("difficulty", difficulty);
+  if (problemId) fd.append("problem_id", problemId);
   // 若之前有进行中的会话，作为 previous 传回，后端会将其标记为「未完成」并落盘
   const prev = sessionStorage.getItem("lastSessionId");
   if (prev) fd.append("previous_session_id", prev);
@@ -704,6 +730,7 @@ async function loadHistory() {
     const data = await res.json();
     const records = data.records || [];
     renderHistoryStats(records);
+    renderMistakes();
     if (records.length === 0) {
       list.innerHTML = '<div class="text-slate-500 text-sm">暂无历史面试记录。完成一次面试后会出现在这里。</div>';
       return;
@@ -836,6 +863,81 @@ async function deleteHistory(id) {
     loadHistory();
   } catch (e) {
     alert("删除失败：" + e.message);
+  }
+}
+
+// ============ 错题本（定向练习入口）============
+async function renderMistakes() {
+  const box = $("mistakesBox");
+  if (!box) return;
+  // 始终展示容器：区分「空态 / 加载失败 / 列表」三种状态
+  box.classList.remove("hidden");
+  box.innerHTML = `
+    <div class="rounded-xl border border-red-400/20 bg-red-500/5 p-4">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm font-medium text-red-200">📕 错题本（代码题未全通过，重练可消灭）</div>
+        <span id="mistakeCount" class="text-xs text-slate-500"></span>
+      </div>
+      <div id="mistakeBody"><div class="text-xs text-slate-500">加载中…</div></div>
+    </div>`;
+  try {
+    const res = await fetch("/api/mistakes");
+    const data = await res.json();
+    const ms = data.mistakes || [];
+    const body = box.querySelector("#mistakeBody");
+    const count = box.querySelector("#mistakeCount");
+    count.textContent = ms.length ? ms.length + " 题待巩固" : "";
+    if (ms.length === 0) {
+      body.innerHTML = `<div class="mt-1 text-xs text-emerald-300/90">🎉 暂无错题，所有算法题都拿下了，继续保持！</div>`;
+      return;
+    }
+    body.innerHTML = `<div class="space-y-2">${ms.map((m) => `
+      <div class="flex items-center justify-between gap-3 rounded-lg border border-white/5 bg-ink-700/40 px-3 py-2">
+        <div class="min-w-0">
+          <div class="text-sm truncate">${escapeHtml(m.title)} <span class="text-xs text-slate-500">（${escapeHtml(m.difficulty)}）</span></div>
+          <div class="text-xs text-slate-500">上次 ${m.last_passed}/${m.last_total} 通过　·　累计错 ${m.wrong_times} 次${m.tags && m.tags.length ? "　·　" + m.tags.map(escapeHtml).join("、") : ""}</div>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <button class="mistake-practice text-xs px-3 py-1.5 rounded-lg bg-brand-500/90 hover:bg-brand-600 font-medium" data-id="${escapeHtml(m.problem_id)}">重练</button>
+          <button class="mistake-del text-xs px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-red-400 hover:text-red-300" data-id="${escapeHtml(m.problem_id)}">移除</button>
+        </div>
+      </div>`).join("")}</div>`;
+    body.querySelectorAll(".mistake-practice").forEach((b) =>
+      b.addEventListener("click", () => startPractice(b.dataset.id)));
+    body.querySelectorAll(".mistake-del").forEach((b) =>
+      b.addEventListener("click", () => deleteMistake(b.dataset.id)));
+  } catch (e) {
+    const body = box.querySelector("#mistakeBody");
+    body.innerHTML = `<button id="mistakeRetry" class="text-xs text-red-300 hover:text-red-200">⚠️ 错题本加载失败，点此重试</button>`;
+    box.querySelector("#mistakeRetry").addEventListener("click", renderMistakes);
+  }
+}
+
+async function startPractice(problemId) {
+  closeHistory();
+  selectMode("coding");
+  $("difficultySelect").value = "";
+  // 重练前校验该题仍在错题本，避免「已消灭/不存在」却静默开随机题
+  let useId = problemId;
+  try {
+    const res = await fetch("/api/mistakes");
+    const data = await res.json();
+    const exists = (data.mistakes || []).some((m) => m.problem_id === problemId);
+    if (!exists) {
+      showHint("该题已消灭 / 不存在，已为你随机抽一道算法题");
+      useId = "";
+    }
+  } catch (e) { /* 校验失败则按原 id 尝试，后端会兜底随机 */ }
+  startInterview({ mode: "coding", problemId: useId });
+}
+
+async function deleteMistake(problemId) {
+  try {
+    const res = await fetch("/api/mistakes/" + encodeURIComponent(problemId), { method: "DELETE" });
+    if (!res.ok) throw new Error("bad");
+    renderMistakes();
+  } catch (e) {
+    showHint("移除失败，请重试");
   }
 }
 

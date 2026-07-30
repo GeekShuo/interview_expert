@@ -274,8 +274,26 @@ PROBLEMS = [
 DIFFICULTY_WEIGHTS = {"简单": 1, "中等": 3, "困难": 1}  # 实习/校招以中等为主
 
 
-def pick_problem(exclude_ids: list[str] | None = None) -> dict:
+def get_problem(problem_id: str) -> dict | None:
+    for p in PROBLEMS:
+        if p["id"] == problem_id:
+            return p
+    return None
+
+
+def pick_problem(exclude_ids: list[str] | None = None,
+                 difficulty: str | None = None,
+                 problem_id: str | None = None) -> dict:
+    """抽题：可指定题目（错题重练）或限定难度（定向练习）。"""
+    if problem_id:
+        p = get_problem(problem_id)
+        if p:
+            return p
     exclude = set(exclude_ids or [])
     pool = [p for p in PROBLEMS if p["id"] not in exclude] or PROBLEMS
+    if difficulty in {"简单", "中等", "困难"}:
+        by_diff = [p for p in pool if p["difficulty"] == difficulty]
+        if by_diff:
+            pool = by_diff
     weights = [DIFFICULTY_WEIGHTS.get(p["difficulty"], 1) for p in pool]
     return random.choices(pool, weights=weights, k=1)[0]
