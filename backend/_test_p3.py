@@ -89,5 +89,15 @@ assert any(m["problem_id"] == "two-sum" for m in lst), lst
 ms._write_all([])
 print("OK 中途放弃写错题本")
 
+# 7) 面试官风格注入 system prompt
+from app import session as sess_mod
+s_strict = sess_mod.Session("本科", "算法实习生", style="strict")
+assert any("专业严谨" in m["content"] for m in s_strict._build_messages(None)), "strict 风格缺失"
+s_warm = sess_mod.Session("本科", "算法实习生", style="warm")
+assert any("温和鼓励" in m["content"] for m in s_warm._build_messages(None)), "warm 风格缺失"
+s_bad = sess_mod.Session("本科", "算法实习生", style="???")
+assert s_bad.style == "strict", s_bad.style
+print("OK 面试官风格注入 + 非法风格回退")
+
 ms._write_all([])  # 清理
 print("ALL_P3_OK")

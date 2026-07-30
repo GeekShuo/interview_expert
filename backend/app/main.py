@@ -66,12 +66,14 @@ async def start_interview(
     mode: str = Form("full"),
     difficulty: str = Form(""),
     problem_id: str = Form(""),
+    style: str = Form("strict"),
 ):
     """创建面试会话（完整面试或定向练习）。
 
     - mode: full / coding / quiz / project
     - difficulty: 简单 / 中等 / 困难（coding 定向练习可选）
     - problem_id: 指定第一道算法题（错题重练）
+    - style: strict(专业严谨) / warm(温和鼓励) / pressure(高压实战)
     - previous_session_id: 若传入且对应会话未完成，则标记「未完成」写入历史。
     """
     if previous_session_id:
@@ -85,7 +87,8 @@ async def start_interview(
         resume_text = resume_text.strip() or "（定向练习模式，候选人未提供简历，请勿追问简历细节）"
         jd_text = jd_text.strip() or "算法工程师（定向练习）"
     s = sess.create_session(resume_text, jd_text, mode=mode,
-                            difficulty=difficulty or None, problem_id=problem_id or None)
+                            difficulty=difficulty or None, problem_id=problem_id or None,
+                            style=style or "strict")
     return {
         "session_id": s.id,
         "persona": s.persona,

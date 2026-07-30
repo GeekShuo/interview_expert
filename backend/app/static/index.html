@@ -25,12 +25,15 @@
   <!-- ============ 启动面板 ============ -->
   <div id="setup" class="h-screen overflow-y-auto flex items-start md:items-center justify-center p-4 md:p-6">
     <div class="w-full max-w-3xl my-8 bg-ink-800/80 backdrop-blur rounded-2xl shadow-2xl border border-white/5 p-6 md:p-8 card-hover">
-      <div class="flex items-center gap-3 mb-1">
-        <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-brand-500 to-indigo-400 flex items-center justify-center text-2xl">🎯</div>
-        <div>
-          <h1 class="text-2xl font-bold tracking-tight">AI 模拟面试 · 算法岗</h1>
-          <p class="text-slate-400 text-sm">上传简历与 JD，随机匹配领域专家面试官，全真四环节模拟</p>
+      <div class="flex items-start justify-between gap-3 mb-1">
+        <div class="flex items-center gap-3">
+          <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-brand-500 to-indigo-400 flex items-center justify-center text-2xl">🎯</div>
+          <div>
+            <h1 class="text-2xl font-bold tracking-tight">AI 模拟面试 · 算法岗</h1>
+            <p class="text-slate-400 text-sm">上传简历与 JD，随机匹配领域专家面试官，全真四环节模拟</p>
+          </div>
         </div>
+        <button id="proBtn" class="shrink-0 text-xs px-3 py-1.5 rounded-lg border border-amber-400/40 text-amber-200 hover:bg-amber-400/10 transition font-medium whitespace-nowrap">⭐ 升级 Pro</button>
       </div>
 
       <!-- 模式选择：完整面试 / 定向练习 -->
@@ -52,6 +55,14 @@
           </select>
         </div>
         <div id="directedNote" class="hidden mt-3 text-xs text-slate-500">💡 定向练习可不填简历 / JD，直接开始即可（会匹配对应环节的面试官）</div>
+        <div class="mt-4">
+          <label class="block text-sm font-medium text-slate-300 mb-2">🗣 面试官风格</label>
+          <div id="stylePills" role="radiogroup" aria-label="面试官风格" class="flex flex-wrap gap-2 text-sm">
+            <button type="button" role="radio" aria-pressed="true" data-style="strict" class="style-pill px-4 py-2 rounded-lg border transition border-brand-500 bg-brand-500/20 text-brand-100">🎯 专业严谨</button>
+            <button type="button" role="radio" aria-pressed="false" data-style="warm" class="style-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">🌿 温和鼓励</button>
+            <button type="button" role="radio" aria-pressed="false" data-style="pressure" class="style-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">🔥 高压实战</button>
+          </div>
+        </div>
       </div>
 
       <div class="grid md:grid-cols-2 gap-5 mt-5">
@@ -172,6 +183,14 @@
         </div>
       </div>
       <div id="reportContent" class="markdown overflow-y-auto px-6 py-5 text-sm leading-relaxed"></div>
+      <div class="flex items-center justify-between gap-2 px-6 py-4 border-t border-white/5">
+        <div class="text-xs text-slate-500">报告可导出留存 / 分享给导师</div>
+        <div class="flex items-center gap-2">
+          <button id="exportMdBtn" class="text-xs px-3 py-1.5 rounded-lg border border-white/10 hover:border-brand-500 hover:text-white transition">⬇ 导出 Markdown</button>
+          <button id="exportPdfBtn" class="text-xs px-3 py-1.5 rounded-lg border border-white/10 hover:border-brand-500 hover:text-white transition">🖨 导出 PDF</button>
+          <button id="closeReport2" class="text-xs px-3 py-1.5 rounded-lg bg-brand-500/90 hover:bg-brand-600 font-medium">完成</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -186,6 +205,30 @@
         <div id="historyStats" class="hidden px-6 pt-5"></div>
         <div id="mistakesBox" class="hidden px-6 pt-4"></div>
         <div id="historyList" class="px-6 py-5 space-y-3"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 升级 Pro 占位弹层 ============ -->
+  <div id="proModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm hidden items-center justify-center p-4 md:p-6 z-50">
+    <div class="modal-card bg-ink-800 rounded-2xl border border-white/10 max-w-md w-full max-h-[85vh] flex flex-col shadow-2xl">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+        <h2 class="font-bold text-lg">⭐ 升级 Pro</h2>
+        <button id="closePro" class="text-slate-400 hover:text-white text-xl leading-none">×</button>
+      </div>
+      <div class="overflow-y-auto px-6 py-5 text-sm leading-relaxed space-y-3">
+        <p class="text-slate-300">解锁更完整的面试陪练体验，向「真正拿到 offer」再近一步：</p>
+        <ul class="list-disc pl-5 space-y-1.5 text-slate-300">
+          <li>无限场完整面试 + 全维度评估报告</li>
+          <li>专项突破包：算法 / 八股 / 项目深挖无限次</li>
+          <li>错题本智能编排复习路线</li>
+          <li>多面试官风格（严谨 / 温和 / 高压）自由切换</li>
+          <li>报告一键导出 PDF / 分享给导师</li>
+        </ul>
+        <p class="text-amber-200/90 text-xs bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">🚧 付费功能正在筹备中，敬请期待。当前所有功能均可免费体验。</p>
+      </div>
+      <div class="px-6 py-4 border-t border-white/5 flex justify-end">
+        <button id="closePro2" class="text-xs px-4 py-2 rounded-lg bg-brand-500/90 hover:bg-brand-600 font-medium">知道了</button>
       </div>
     </div>
   </div>

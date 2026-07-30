@@ -6,6 +6,8 @@ const state = {
   editor: null,
   streaming: false,
   mode: "full", // 完整面试 | coding/quiz/project 定向练习
+  style: "strict", // strict 专业严谨 | warm 温和鼓励 | pressure 高压实战
+  report: "", // 当前/查看中的报告 markdown（用于导出）
 };
 
 const $ = (id) => document.getElementById(id);
@@ -137,6 +139,23 @@ document.querySelectorAll(".mode-pill").forEach((btn) => {
   btn.addEventListener("click", () => selectMode(btn.dataset.mode));
 });
 
+// ============ 面试官风格选择 ============
+function selectStyle(style) {
+  state.style = style;
+  document.querySelectorAll(".style-pill").forEach((b) => {
+    const on = b.dataset.style === style;
+    b.classList.toggle("border-brand-500", on);
+    b.classList.toggle("bg-brand-500/20", on);
+    b.classList.toggle("text-brand-100", on);
+    b.classList.toggle("border-white/10", !on);
+    b.classList.toggle("text-slate-400", !on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+document.querySelectorAll(".style-pill").forEach((btn) => {
+  btn.addEventListener("click", () => selectStyle(btn.dataset.style));
+});
+
 async function startInterview(overrides = {}) {
   const resumeText = $("resumeText").value.trim();
   const jdText = $("jdText").value.trim();
@@ -154,6 +173,7 @@ async function startInterview(overrides = {}) {
   fd.append("resume_text", resumeText);
   fd.append("jd_text", jdText);
   fd.append("mode", mode);
+  fd.append("style", state.style || "strict");
   if (difficulty) fd.append("difficulty", difficulty);
   if (problemId) fd.append("problem_id", problemId);
   // 若之前有进行中的会话，作为 previous 传回，后端会将其标记为「未完成」并落盘
@@ -645,9 +665,38 @@ function handleReportToken(text, start) {
   }
   reportAcc += text;
   $("reportContent").innerHTML = safeMd(reportAcc);
+  state.report = reportAcc;
   renderReportScore(reportAcc);
   const rc = $("reportContent");
   rc.scrollTop = rc.scrollHeight;
+}
+
+// 报告导出：Markdown / PDF（可留存与分享）
+function exportMarkdown() {
+  const md = state.report || "";
+  if (!md.trim()) { showHint("暂无可导出的报告"); return; }
+  const blob = new Blob(["# 模拟面试评估报告\n\n" + md], { type: "text/markdown;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "面试评估报告.md";
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportPDF() {
+  const md = state.report || "";
+  if (!md.trim()) { showHint("暂无可导出的报告"); return; }
+  const html = '<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>面试评估报告</title>'
+    + '<style>body{font-family:system-ui,"Microsoft YaHei",sans-serif;max-width:820px;margin:32px auto;padding:0 20px;color:#1a1a1a;line-height:1.7}'
+    + 'h1,h2,h3{border-bottom:1px solid #eee;padding-bottom:4px;color:#1f2a6e}'
+    + 'code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:13px}'
+    + 'pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;overflow:auto}'
+    + 'table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:6px 10px}'
+    + 'blockquote{border-left:3px solid #6366f1;margin:0;padding-left:12px;color:#555}</style></head><body>'
+    + safeMd(md) + '<scr' + 'ipt>window.onload=function(){window.print();}<\/scr' + 'ipt></body></html>';
+  const w = window.open("", "_blank");
+  if (!w) { showHint("请允许弹出窗口以导出 PDF"); return; }
+  w.document.write(html); w.document.close();
 }
 
 // 从报告文本中解析总分与结论
@@ -717,6 +766,22 @@ function closeHistory() {
 $("historyBtn").addEventListener("click", openHistory);
 $("historyBtnSetup").addEventListener("click", openHistory);
 $("closeHistory").addEventListener("click", closeHistory);
+
+// 报告导出 & 升级 Pro 占位
+$("exportMdBtn").addEventListener("click", exportMarkdown);
+$("exportPdfBtn").addEventListener("click", exportPDF);
+$("closeReport2").addEventListener("click", () => {
+  $("reportModal").classList.add("hidden");
+  $("reportModal").classList.remove("flex");
+});
+const proModal = $("proModal");
+$("proBtn").addEventListener("click", () => {
+  proModal.classList.remove("hidden"); proModal.classList.add("flex");
+  const c = proModal.querySelector(".modal-card");
+  c.classList.remove("modal-anim"); void c.offsetWidth; c.classList.add("modal-anim");
+});
+$("closePro").addEventListener("click", () => { proModal.classList.add("hidden"); proModal.classList.remove("flex"); });
+$("closePro2").addEventListener("click", () => { proModal.classList.add("hidden"); proModal.classList.remove("flex"); });
 
 $("expandEditorBtn").addEventListener("click", toggleEditorExpand);
 
@@ -853,6 +918,7 @@ async function viewHistoryDetail(id) {
       ? `<details class="mt-4 pt-3 border-t border-white/5"><summary class="cursor-pointer text-slate-400 text-xs">查看完整对话记录</summary><pre class="mt-2 whitespace-pre-wrap text-xs text-slate-300 bg-ink-900/50 rounded-lg p-3">${escapeHtml(rec.transcript)}</pre></details>`
       : "";
     $("reportContent").innerHTML = safeMd(rec.report || "（无报告）") + transcriptHtml;
+    state.report = rec.report || "";
     $("reportContent").scrollTop = 0;
     closeHistory();
     openReport();

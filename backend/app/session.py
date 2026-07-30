@@ -44,11 +44,13 @@ STAGE_TURN_LIMITS = {
 
 class Session:
     def __init__(self, resume_text: str, jd_text: str, mode: str = "full",
-                 difficulty: Optional[str] = None, problem_id: Optional[str] = None):
+                 difficulty: Optional[str] = None, problem_id: Optional[str] = None,
+                 style: str = "strict"):
         self.id = uuid.uuid4().hex[:12]
         self.mode = mode if mode in MODE_FLOWS else "full"
         self.difficulty = difficulty if difficulty in {"简单", "中等", "困难"} else None
         self.requested_problem_id = problem_id or None  # 错题重练：指定第一题
+        self.style = style if style in prompts.STYLE_INSTR else "strict"
         self.jd = parser.parse_jd(jd_text)
         self.resume = parser.parse_resume(resume_text)
         self.persona = personas.assign_persona(jd_text + " " + self.jd.get("full_text", ""))
@@ -106,6 +108,8 @@ class Session:
         msgs = [{"role": "system", "content": self._system_prompt()}]
         # 不可覆盖的安全护栏，常驻于每轮对话
         msgs.append({"role": "system", "content": prompts.GUARDRAIL})
+        # 面试官风格：常驻于每轮对话，影响语气与压迫感
+        msgs.append({"role": "system", "content": prompts.style_line(self.style)})
         if self.memo:
             msgs.append({
                 "role": "system",
@@ -314,7 +318,7 @@ class Session:
             for j in self.judge_results
         ) or "（本场无自动判题记录）"
         prompt = prompts.report_prompt(
-            self.persona, self.resume, self.jd, transcript, memo_text, judge_text
+            self.persona, self.resume, self.jd, transcript, memo_text, judge_text, style=self.style
         )
         yield {"type": "report_start"}
         report_text = ""
@@ -481,8 +485,9 @@ _SESSIONS: dict[str, Session] = {}
 
 def create_session(resume_text: str, jd_text: str, mode: str = "full",
                    difficulty: Optional[str] = None,
-                   problem_id: Optional[str] = None) -> Session:
-    s = Session(resume_text, jd_text, mode=mode, difficulty=difficulty, problem_id=problem_id)
+                   problem_id: Optional[str] = None,
+                   style: str = "strict") -> Session:
+    s = Session(resume_text, jd_text, mode=mode, difficulty=difficulty, problem_id=problem_id, style=style)
     _SESSIONS[s.id] = s
     s._persist_live()
     return s
