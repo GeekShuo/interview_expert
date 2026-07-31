@@ -9,6 +9,8 @@ import os
 import time
 import uuid
 import threading
+import contextlib
+import fcntl
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
@@ -16,8 +18,24 @@ HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
 # 最大保留条数，避免无限增长
 MAX_RECORDS = 200
 
-# 串行化文件写操作，防止并发互相覆盖
+# 进程内串行化（同进程多线程）；跨进程由 _file_lock 兜底（多 worker 场景）
 _WRITE_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _file_lock():
+    """跨进程文件锁：多 uvicorn worker 并发写 JSON 时，避免读到半成品文件或互相覆盖。
+
+    说明：仅在本机（macOS / Linux）生效，依赖 fcntl.flock。Windows 下请单 worker 运行。
+    """
+    os.makedirs(DATA_DIR, exist_ok=True)
+    lock_path = os.path.join(DATA_DIR, ".json_write.lock")
+    with open(lock_path, "w", encoding="utf-8") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
 
 
 def _ensure_file():
@@ -55,24 +73,31 @@ def _write_all(records):
 
 def save_record(record: dict) -> str:
     """保存一条面试记录，返回其 id。"""
-    records = _read_all()
-    rid = record.get("id") or ("iv_" + uuid.uuid4().hex[:12])
-    record["id"] = rid
-    record.setdefault("created_at", time.time())
-    # 更新或插入
-    for i, r in enumerate(records):
-        if r.get("id") == rid:
-            records[i] = record
-            break
-    else:
-        records.append(record)
-    _write_all(records)
+    with _file_lock():
+        records = _read_all()
+        rid = record.get("id") or ("iv_" + uuid.uuid4().hex[:12])
+        record["id"] = rid
+        record.setdefault("created_at", time.time())
+        # 更新或插入
+        for i, r in enumerate(records):
+            if r.get("id") == rid:
+                records[i] = record
+                break
+        else:
+            records.append(record)
+        _write_all(records)
     return rid
 
 
-def list_records() -> list:
-    """返回记录列表（按时间倒序，最新在前）。"""
+def list_records(user_id: str | None = None) -> list:
+    """返回记录列表（按时间倒序，最新在前）。
+
+    user_id 为空时返回全部（兼容旧数据 / 单用户）；传入时仅返回该用户记录，
+    实现多用户「成长曲线」互不串数据。
+    """
     records = _read_all()
+    if user_id:
+        records = [r for r in records if r.get("user_id") == user_id]
     records.sort(key=lambda r: r.get("finished_at") or r.get("created_at") or 0, reverse=True)
     # 列表页只返回摘要字段，避免传输大段报告
     summary = []
@@ -103,9 +128,10 @@ def get_record(rid: str) -> dict | None:
 
 
 def delete_record(rid: str) -> bool:
-    records = _read_all()
-    new = [r for r in records if r.get("id") != rid]
-    if len(new) == len(records):
-        return False
-    _write_all(new)
+    with _file_lock():
+        records = _read_all()
+        new = [r for r in records if r.get("id") != rid]
+        if len(new) == len(records):
+            return False
+        _write_all(new)
     return True

@@ -16,6 +16,7 @@ from typing import Iterator, Optional
 
 from . import llm, prompts, personas, parser, runner, mistakes
 from . import history as history_store
+from .config import settings
 from .problems import pick_problem
 from .questions import pick_questions
 from .schemas import Stage, STAGE_LABELS, STAGE_ORDER
@@ -45,15 +46,19 @@ STAGE_TURN_LIMITS = {
 class Session:
     def __init__(self, resume_text: str, jd_text: str, mode: str = "full",
                  difficulty: Optional[str] = None, problem_id: Optional[str] = None,
-                 style: str = "strict"):
+                 style: str = "strict", direction: Optional[str] = None,
+                 tier: str = "normal", user_id: Optional[str] = None):
         self.id = uuid.uuid4().hex[:12]
         self.mode = mode if mode in MODE_FLOWS else "full"
         self.difficulty = difficulty if difficulty in {"简单", "中等", "困难"} else None
         self.requested_problem_id = problem_id or None  # 错题重练：指定第一题
         self.style = style if style in prompts.STYLE_INSTR else "strict"
+        self.tier = "pro" if tier == "pro" else "normal"   # 普通 / Pro
+        self.user_id = user_id or None                      # 多用户隔离：历史与错题按此分区
         self.jd = parser.parse_jd(jd_text)
         self.resume = parser.parse_resume(resume_text)
-        self.persona = personas.assign_persona(jd_text + " " + self.jd.get("full_text", ""))
+        self.direction = direction or None  # 用户显式指定的方向，覆盖自动推断
+        self.persona = personas.assign_persona(jd_text + " " + self.jd.get("full_text", ""), direction)
         self.stage: Stage = self.stage_flow[0]
         self.history: list[dict] = []          # [{role, content}] 仅可见对话
         self.memo: list[str] = []              # 面试官隐藏笔记
@@ -79,6 +84,11 @@ class Session:
     @property
     def stage_flow(self) -> list:
         return MODE_FLOWS.get(self.mode, STAGE_ORDER)
+
+    @property
+    def model(self) -> str:
+        """本会话使用的 LLM 模型：Pro 用更强模型，未配置则回退普通模型。"""
+        return settings.pro_model if self.tier == "pro" else settings.LLM_MODEL
 
     def _pick(self) -> dict:
         """按难度/指定题抽题（指定题只生效一次）。"""
@@ -114,6 +124,14 @@ class Session:
             msgs.append({
                 "role": "system",
                 "content": "【你之前的面试笔记，供参考】\n" + "\n".join(self.memo[-12:]),
+            })
+        # Pro 模式：要求更深入、更挑剔的技术点评与更具体的改进建议
+        if self.tier == "pro":
+            msgs.append({
+                "role": "system",
+                "content": "【Pro 模式】请进行更深入、更严格的专业点评：指出候选人回答中"
+                           "更隐蔽的逻辑漏洞与边界问题，给出更具体的改进路径与进阶学习方向，"
+                           "并在结论中给出更细颗粒度的能力评估。",
             })
         msgs.extend(self.history[-16:])
         if user_message is not None:
@@ -169,7 +187,7 @@ class Session:
         sent = 0
         found_sep = False
         keep = len(prompts.SEP_MEMO) + 2  # 尾部保护，避免分隔符被截断误发
-        for delta in llm.chat_stream(messages):
+        for delta in llm.chat_stream(messages, model=self.model):
             full += delta
             if not found_sep:
                 cut = full.find(prompts.SEP_MEMO)
@@ -322,7 +340,7 @@ class Session:
         )
         yield {"type": "report_start"}
         report_text = ""
-        for delta in llm.chat_stream([{"role": "user", "content": prompt}], temperature=0.4):
+        for delta in llm.chat_stream([{"role": "user", "content": prompt}], temperature=0.4, model=self.model):
             report_text += delta
             yield {"type": "token", "text": delta, "channel": "report"}
         self.report_text = report_text
@@ -334,7 +352,7 @@ class Session:
         self._delete_live()  # 已完成：不再需要恢复快照
         # 错题本：未全通过的题记入，全通过的自动消灭
         try:
-            mistakes.record_session_results(self.judge_results)
+            mistakes.record_session_results(self.judge_results, user_id=self.user_id)
         except Exception:
             pass
         yield {"type": "stage", "stage": self.stage.value, "label": STAGE_LABELS[self.stage]}
@@ -415,6 +433,8 @@ class Session:
             ),
             "report": self.report_text,
             "transcript": transcript,
+            "user_id": self.user_id,
+            "tier": self.tier,
         }
 
     def _save_history(self, abandoned: bool = False):
@@ -434,7 +454,7 @@ class Session:
         self._save_history(abandoned=True)
         # 中途放弃也要把做错的算法题写入错题本，否则错题本核心闭环在放弃场景失效
         try:
-            mistakes.record_session_results(self.judge_results)
+            mistakes.record_session_results(self.judge_results, user_id=self.user_id)
         except Exception:
             pass
         self._delete_live()
@@ -445,7 +465,7 @@ class Session:
         "current_problem", "quiz_pool", "coding_phase", "progress", "stage_turns",
         "started_at", "finished_at", "score", "verdict", "report_text",
         "abandoned", "judge_results", "dimensions", "mode", "difficulty",
-        "requested_problem_id",
+        "requested_problem_id", "direction", "tier", "user_id", "style",
     ]
 
     def snapshot(self) -> dict:
@@ -461,6 +481,9 @@ class Session:
         if s.mode not in MODE_FLOWS:  # 兼容旧快照
             s.mode = "full"
         s.stage = Stage(data["stage"])
+        s.tier = data.get("tier") or "normal"
+        s.user_id = data.get("user_id") or None
+        s.style = data.get("style") or "strict"
         s._saved = False
         s._lock = threading.Lock()
         s._report_done = False
@@ -496,8 +519,9 @@ _SESSIONS: dict[str, Session] = {}
 def create_session(resume_text: str, jd_text: str, mode: str = "full",
                    difficulty: Optional[str] = None,
                    problem_id: Optional[str] = None,
-                   style: str = "strict") -> Session:
-    s = Session(resume_text, jd_text, mode=mode, difficulty=difficulty, problem_id=problem_id, style=style)
+                   style: str = "strict", direction: Optional[str] = None,
+                   tier: str = "normal", user_id: Optional[str] = None) -> Session:
+    s = Session(resume_text, jd_text, mode=mode, difficulty=difficulty, problem_id=problem_id, style=style, direction=direction, tier=tier, user_id=user_id)
     _SESSIONS[s.id] = s
     s._persist_live()
     return s

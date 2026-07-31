@@ -33,7 +33,11 @@
             <p class="text-slate-400 text-sm">上传简历与 JD，随机匹配领域专家面试官，全真四环节模拟</p>
           </div>
         </div>
-        <button id="proBtn" class="shrink-0 text-xs px-3 py-1.5 rounded-lg border border-amber-400/40 text-amber-200 hover:bg-amber-400/10 transition font-medium whitespace-nowrap">⭐ 升级 Pro</button>
+        <div id="tierToggle" role="group" aria-label="版本切换" class="shrink-0 flex items-center gap-0.5 text-xs rounded-lg border border-white/10 p-0.5 bg-ink-900/40">
+          <button type="button" data-tier="normal" class="tier-opt px-2.5 py-1 rounded-md transition font-medium">普通</button>
+          <button type="button" data-tier="pro" class="tier-opt px-2.5 py-1 rounded-md transition font-medium">⭐ Pro</button>
+        </div>
+        <div id="setupUserChip" class="hidden shrink-0 text-xs text-slate-300 px-2.5 py-1 rounded-lg border border-white/10 bg-ink-900/40 cursor-pointer hover:border-brand-500 transition">游客</div>
       </div>
 
       <!-- 模式选择：完整面试 / 定向练习 -->
@@ -44,6 +48,19 @@
           <button type="button" role="radio" aria-pressed="false" data-mode="coding" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">💻 只练手撕代码</button>
           <button type="button" role="radio" aria-pressed="false" data-mode="quiz" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">📖 只练专业八股</button>
           <button type="button" role="radio" aria-pressed="false" data-mode="project" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">🗂 只练项目深挖</button>
+        </div>
+        <div class="mt-3">
+          <label class="block text-sm font-medium text-slate-300 mb-2">🧭 面试方向</label>
+          <div id="dirPills" role="radiogroup" aria-label="面试方向" class="flex flex-wrap gap-2 text-sm">
+            <button type="button" role="radio" aria-pressed="true" data-dir="auto" class="dir-pill px-3 py-1.5 rounded-lg border transition border-brand-500 bg-brand-500/20 text-brand-100">🔄 自动</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="计算机视觉" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">👁 CV</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="自然语言处理" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">💬 NLP</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="推荐系统" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">📈 推荐</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="大模型" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">🤖 LLM</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="机器学习" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">📊 机器学习</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="深度学习" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">🧠 深度学习</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="通用算法" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">⚙️ 通用</button>
+          </div>
         </div>
         <div id="difficultyRow" class="hidden mt-3 flex items-center gap-2 text-sm">
           <span class="text-slate-400 text-xs">题目难度</span>
@@ -74,6 +91,14 @@
           </label>
           <textarea id="resumeText" rows="7" placeholder="或直接粘贴简历全文…"
             class="w-full rounded-lg bg-ink-700/50 border border-white/10 p-3 text-sm resize-none focus:outline-none focus:border-brand-500"></textarea>
+        <div id="resumePreview" class="hidden mt-3 rounded-xl border border-white/10 bg-ink-700/40 p-3">
+          <div class="text-xs font-medium text-slate-300 mb-1">📄 简历解析预览（可核对 / 编辑）</div>
+          <div class="text-xs text-slate-400 mb-1">面试官理解为：</div>
+          <div id="resumeSummary" class="text-sm text-slate-200 mb-2 whitespace-pre-wrap"></div>
+          <div class="text-xs text-slate-400 mb-1">可追问点（可直接修改，将影响面试官深挖方向）：</div>
+          <textarea id="resumeProbe" rows="4" placeholder="（上传简历后自动生成）"
+            class="w-full rounded-lg bg-ink-900/50 border border-white/10 p-2 text-xs resize-none focus:outline-none focus:border-brand-500"></textarea>
+        </div>
         </div>
         <div>
           <label class="block text-sm font-medium text-slate-300 mb-2">💼 目标岗位 JD</label>
@@ -119,6 +144,7 @@
       <!-- 环节进度 -->
       <div id="stageBar" class="order-3 w-full md:order-none md:w-auto md:flex-1 flex items-center gap-1 text-xs md:justify-center mt-1 md:mt-0 overflow-x-auto"></div>
       <div class="flex flex-wrap items-center gap-2">
+        <button id="userChip" class="hidden text-xs text-slate-300 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">游客</button>
         <button id="historyBtn" class="text-xs text-slate-300 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">📚 历史</button>
         <label id="voiceModeLabel" class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-brand-500 transition" title="开启后：面试官自动朗读，读完自动开麦听你回答，静音自动发送">
           <input type="checkbox" id="voiceModeToggle" class="accent-brand-500" />
@@ -242,6 +268,27 @@
       <div class="px-6 py-4 border-t border-white/5 flex justify-end">
         <button id="closePro2" class="text-xs px-4 py-2 rounded-lg bg-brand-500/90 hover:bg-brand-600 font-medium">期待上线</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ============ 登录弹层 ============ -->
+  <div id="loginModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
+    <div class="w-full max-w-sm bg-ink-800 rounded-2xl border border-white/10 p-6 shadow-2xl">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-500 to-indigo-400 flex items-center justify-center text-xl">🎯</div>
+        <div>
+          <h2 class="font-bold text-lg">登录账户</h2>
+          <p class="text-slate-400 text-xs">登录后历史与错题按账户隔离，多端、多次打开都能看到自己的数据</p>
+        </div>
+      </div>
+      <div id="accountQuick" class="flex flex-col gap-2 mb-4"></div>
+      <div class="flex items-center gap-2 my-3 text-xs text-slate-500"><span class="flex-1 h-px bg-white/10"></span>或用账号密码<span class="flex-1 h-px bg-white/10"></span></div>
+      <input id="loginUser" placeholder="用户名" autocomplete="username" class="w-full mb-2 rounded-lg bg-ink-700 border border-white/10 px-3 py-2.5 text-sm focus:outline-none focus:border-brand-500" />
+      <input id="loginPass" type="password" placeholder="密码" autocomplete="current-password" class="w-full mb-3 rounded-lg bg-ink-700 border border-white/10 px-3 py-2.5 text-sm focus:outline-none focus:border-brand-500" />
+      <button id="loginBtn" class="w-full h-11 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-500 hover:from-brand-600 hover:to-indigo-600 font-semibold text-white transition">登录</button>
+      <div id="loginErr" class="text-rose-400 text-xs mt-2 hidden"></div>
+      <p class="text-center text-slate-500 text-[11px] mt-2">预置演示账户：alice / bob / carol / dave，密码均为 pass123</p>
+      <button id="guestBtn" class="w-full mt-3 text-xs text-slate-400 hover:text-slate-200">游客模式（不登录也能练习，但历史仅保存在本机本浏览器）</button>
     </div>
   </div>
 

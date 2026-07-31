@@ -10,6 +10,7 @@ from . import session as sess
 from . import parser
 from . import history as history_store
 from . import mistakes as mistakes_store
+from . import accounts as accounts_store
 from .config import settings
 from .schemas import ChatRequest, CodeSubmitRequest, STAGE_LABELS
 from .schemas import Stage
@@ -55,7 +56,31 @@ async def upload_resume(file: UploadFile = File(...)):
     if name.endswith(".pdf") and not content.startswith(b"%PDF"):
         raise HTTPException(415, "文件不是有效的 PDF")
     text = parser.extract_text_from_file(file.filename, content)
-    return {"filename": file.filename, "text": text}
+    parsed = parser.parse_resume(text)
+    return {
+        "filename": file.filename,
+        "text": text,
+        "parsed": {
+            "summary": parsed.get("summary", ""),
+            "probe_points": parsed.get("probe_points", ""),
+        },
+    }
+
+
+# ---------- 账户登录（多用户隔离的入口）----------
+@app.get("/api/accounts")
+def accounts_list():
+    """返回可登录的预置账户（仅用户名与显示名，不含密码），供登录页展示。"""
+    return {"accounts": accounts_store.list_public()}
+
+
+@app.post("/api/login")
+def login(username: str = Form(""), password: str = Form("")):
+    """校验账户密码，成功返回该账户作为稳定 user_id（历史/错题按账户隔离）。"""
+    acc = accounts_store.verify(username, password)
+    if not acc:
+        raise HTTPException(401, "用户名或密码错误")
+    return {"ok": True, "user_id": acc["username"], "name": acc["name"]}
 
 
 @app.post("/api/start")
@@ -67,6 +92,10 @@ async def start_interview(
     difficulty: str = Form(""),
     problem_id: str = Form(""),
     style: str = Form("strict"),
+    resume_probe_points: str = Form(""),
+    direction: str = Form(""),
+    tier: str = Form(""),
+    user_id: str = Form(""),
 ):
     """创建面试会话（完整面试或定向练习）。
 
@@ -88,16 +117,21 @@ async def start_interview(
         jd_text = jd_text.strip() or "算法工程师（定向练习）"
     s = sess.create_session(resume_text, jd_text, mode=mode,
                             difficulty=difficulty or None, problem_id=problem_id or None,
-                            style=style or "strict")
+                            style=style or "strict", direction=direction or None,
+                            tier=tier or "normal", user_id=user_id or None)
+    if resume_probe_points and resume_probe_points.strip():
+        s.resume["probe_points"] = resume_probe_points.strip()
     return {
         "session_id": s.id,
         "persona": s.persona,
         "jd": {"title": s.jd.get("title"), "requirements": s.jd.get("requirements")},
         "resume_summary": s.resume.get("summary"),
+        "resume_probe_points": s.resume.get("probe_points"),
         "stage": s.stage.value,
         "stage_label": STAGE_LABELS[s.stage],
         "mode": s.mode,
         "stages": [{"key": st.value, "label": STAGE_LABELS[st]} for st in s.stage_flow],
+        "tier": s.tier,
         "llm_ready": settings.llm_ready,
     }
 
@@ -170,6 +204,7 @@ def state(session_id: str):
         "resume_summary": s.resume.get("summary"),
         "mode": s.mode,
         "style": s.style,
+        "tier": s.tier,
         "stages": [{"key": st.value, "label": STAGE_LABELS[st]} for st in s.stage_flow],
         "history": s.public_history(),
         "current_problem": None if not p else {
@@ -186,9 +221,9 @@ def state(session_id: str):
 
 # ---------- 历史面试 ----------
 @app.get("/api/history")
-def list_history():
-    """返回历史面试摘要列表（最新在前）。"""
-    return {"records": history_store.list_records()}
+def list_history(user_id: str = ""):
+    """返回历史面试摘要列表（最新在前）。user_id 传入时仅返回该用户记录。"""
+    return {"records": history_store.list_records(user_id or None)}
 
 
 @app.get("/api/history/{record_id}")
@@ -211,9 +246,16 @@ def delete_history(record_id: str):
 
 # ---------- 错题本 ----------
 @app.get("/api/mistakes")
-def list_mistakes():
-    """错题本：自动判题未全通过的题（全通过后自动消灭）。"""
-    return {"mistakes": mistakes_store.list_mistakes()}
+def list_mistakes(user_id: str = ""):
+    """错题本：自动判题未全通过的题（全通过后自动消灭）。user_id 传入时仅返回该用户错题。"""
+    return {"mistakes": mistakes_store.list_mistakes(user_id or None)}
+
+
+@app.post("/api/mistakes/quiz")
+def add_quiz_mistake(direction: str = Form(""), question: str = Form(""), user_id: str = Form("")):
+    """八股错题：八股无客观判题，由用户自评入本（按题目文本去重，按用户分区）。"""
+    mistakes_store.record_quiz_mistake(direction, question, user_id or None)
+    return {"ok": True}
 
 
 @app.delete("/api/mistakes/{problem_id}")

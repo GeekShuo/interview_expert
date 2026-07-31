@@ -19,10 +19,10 @@ def get_client() -> OpenAI:
     return _client
 
 
-def chat(messages: list[dict], temperature: float | None = None) -> str:
-    """一次性返回完整回复。"""
+def chat(messages: list[dict], temperature: float | None = None, model: str | None = None) -> str:
+    """一次性返回完整回复。model 缺省用普通模型。"""
     resp = get_client().chat.completions.create(
-        model=settings.LLM_MODEL,
+        model=model or settings.LLM_MODEL,
         messages=messages,
         temperature=settings.LLM_TEMPERATURE if temperature is None else temperature,
         stream=False,
@@ -30,10 +30,10 @@ def chat(messages: list[dict], temperature: float | None = None) -> str:
     return resp.choices[0].message.content or ""
 
 
-def chat_stream(messages: list[dict], temperature: float | None = None) -> Iterator[str]:
-    """流式返回增量文本。"""
+def chat_stream(messages: list[dict], temperature: float | None = None, model: str | None = None) -> Iterator[str]:
+    """流式返回增量文本。model 缺省用普通模型。"""
     stream = get_client().chat.completions.create(
-        model=settings.LLM_MODEL,
+        model=model or settings.LLM_MODEL,
         messages=messages,
         temperature=settings.LLM_TEMPERATURE if temperature is None else temperature,
         stream=True,

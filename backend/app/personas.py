@@ -63,9 +63,12 @@ def detect_direction(jd_text: str) -> str:
     return best if scores[best] > 0 else "通用算法"
 
 
-def assign_persona(jd_text: str) -> dict:
-    """根据 JD 方向随机分配一位面试官。"""
-    direction = detect_direction(jd_text)
+def assign_persona(jd_text: str, direction: str = None) -> dict:
+    """根据 JD 方向随机分配一位面试官；direction 显式指定时优先使用（覆盖自动推断）。"""
+    if direction and direction in PERSONAS:
+        pass  # 使用用户指定的方向
+    else:
+        direction = detect_direction(jd_text)
     pool = PERSONAS.get(direction, PERSONAS["通用算法"])
     persona = dict(random.choice(pool))
     persona["direction"] = direction

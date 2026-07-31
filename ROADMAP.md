@@ -170,3 +170,30 @@
 | 面多多 | https://www.mianduoduo.com.cn | 国内，简历押题+沉浸式模拟，定位最接近 |
 | 牛面（牛客） | https://www.nowcoder.com/interview/ai | 程序员专项 AI 模拟面试 |
 | AI面试官 | https://www.viewself.cn | 可追问的连贯模拟面试 |
+
+---
+
+## 当前进度（截至 2026-07-31）
+
+> 部署：已验证可在 macOS（Apple Silicon）通过 uv 部署运行；启动用 `.venv/bin/python -m uvicorn app.main:app`（避开 `uv run` 在本机 TLS 阻断下联网卡死），或 `./run_server.sh`。
+> 待做清单见 `TODO.md`（唯一入口）。
+
+### P0 全部完成 ✅
+- **P0-1 沙箱真实判题**：`runner.py` 沙箱 + `problems.py` 10 题测试用例，实测正确 4/4、错误 0/4，结果注入面试官评价、前端渲染判题卡片。
+- **P0-2 报告可执行提升计划**：`prompts.py` 报告 prompt 已含「改进建议 + 可执行提升计划（知识点 / 推荐题目 / 7 天冲刺）」。
+- **P0-3 简历解析预览 / 可编辑**：上传即结构化解析，`#resumePreview` 展示 summary + 可追问点，用户可编辑后回传覆盖，影响深挖方向。
+
+### P1 全部完成 ✅
+- **P1-1 会话持久化与恢复**：后端 `/api/state` + `_persist_live` 落盘 + `get_session` 磁盘恢复；前端 `checkResumable()` + `resumeInterview()` 重建对话与代码面板。实测 /api/state 正确恢复历史对话。
+- **P1-2 成长曲线**：趋势 sparkline + 平均分/最高分/变化 + 薄弱点标签；**本次新增纯 SVG 雷达图**（零 CDN 依赖）。
+- **P1-3 定向练习模式**：`modePills` 四选一 + 后端 `MODE_FLOWS` 全支持。
+- **P1-4 难度与方向选择**：难度（简单/中等/困难）后端抽题本已支持；**本次新增方向选择** `assign_persona(direction)` 覆盖自动推断 + 前端 `dirPills`（自动/CV/NLP/推荐/LLM/机器学习/深度学习/通用），实测生效。
+- **P1-5 错题本**：代码侧早已支持；**本次补八股侧**（`record_quiz_mistake` + `/api/mistakes/quiz` + 八股气泡「加入错题本」按钮 + 错题本区分两类并重练）。
+- **P1 补充 · 普通/Pro 切换**：头部「普通 / ⭐Pro」开关（localStorage 持久化）。Pro = 更强模型（`LLM_MODEL_PRO`，未配置回退普通模型）+ 更深点评 prompt；`/api/start` 与 `/api/state` 回传 `tier`。实测 `tier=pro` 往返与 Pro 提示注入均生效。
+- **P1 补充 · 多用户隔离**：会话本就按 `session_id` 隔离并行；成长曲线与错题本现已按 `user_id` 分区（`/api/history?user_id=`、`/api/mistakes?user_id=`），多人开面试互不串数据。实测 u_A/u_B 完全隔离。
+- **P1 补充 · 账户登录（稳定 user_id）**：新增 `accounts.py` 首次启动播种 4 个演示账户（alice/bob/carol/dave，密码 pass123）至 `data/accounts.json`；`GET /api/accounts` 列表 + `POST /api/login` 校验，登录后以**账户名**作稳定 `user_id`，历史/错题**跨浏览器、跨设备、多次打开都能看到自己的数据**；游客模式保留（回退匿名 `ie_uid`）。前端登录弹层支持一键登录/账号密码/游客。
+- **P1 补充 · 多 worker 部署**：`run_server.sh` 默认 `--workers 2`（可 `WORKERS=N` 调大）；`history.json`/`mistakes.json` 加**跨进程文件锁**（`fcntl.flock`，`history._file_lock`）防多进程并发写覆盖；并修复跨 worker/重启恢复会话缺 `style` 的 500（快照 `_SNAP_FIELDS` 补 `style` + 兜底默认）。实测 2 worker 下 12 次跨进程 `/api/state` 全部 200、登录隔离正常。
+
+> 💡 运行：`./run_server.sh`（默认 2 worker）。想让 Pro 用更强模型：在 `backend/.env` 增加 `LLM_MODEL_PRO=你的强模型名`，不配则自动回退普通模型，开关始终可用。Windows 不支持 `fcntl`，请保持默认 `WORKERS=1`。
+
+> ⚠️ 部署注意：会话状态已落盘到 `data/live_sessions/`，任意 worker 都能恢复，开多 worker 不会串会话；但服务进程无法热重启，改完代码需 `pkill -f uvicorn; cd backend && ./run_server.sh` 后刷新。

@@ -115,12 +115,21 @@ $("resumeFile").addEventListener("change", async (e) => {
       if (text) $("resumeText").value = text; // 保留错误信息供参考
     } else {
       $("resumeText").value = text;
-      $("resumeFileName").textContent = `✓ ${file.name} · 已提取 ${text.length} 字，可在下方核对/编辑`;
+      $("resumeFileName").textContent = `✓ ${file.name} · 已提取 ${text.length} 字，已解析要点可核对`;
+      showResumePreview(data.parsed);
     }
   } catch {
     $("resumeFileName").textContent = "解析失败，请改用粘贴";
   }
 });
+
+// 上传后展示简历结构化解析预览（summary + 可编辑的追问点）
+function showResumePreview(parsed) {
+  if (!parsed) return;
+  $("resumeSummary").textContent = parsed.summary || "（无）";
+  $("resumeProbe").value = parsed.probe_points || "";
+  $("resumePreview").classList.remove("hidden");
+}
 
 $("startBtn").addEventListener("click", startInterview);
 
@@ -143,6 +152,21 @@ document.querySelectorAll(".mode-pill").forEach((btn) => {
   btn.addEventListener("click", () => selectMode(btn.dataset.mode));
 });
 
+// ============ 面试方向选择（影响面试官人设：CV/NLP/推荐/LLM…）============
+function selectDir(dir) {
+  document.querySelectorAll(".dir-pill").forEach((b) => {
+    const on = b.dataset.dir === dir;
+    b.classList.toggle("border-brand-500", on);
+    b.classList.toggle("bg-brand-500/20", on);
+    b.classList.toggle("text-brand-100", on);
+    b.classList.toggle("text-slate-400", !on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+document.querySelectorAll(".dir-pill").forEach((btn) => {
+  btn.addEventListener("click", () => selectDir(btn.dataset.dir));
+});
+
 // ============ 面试官风格选择 ============
 function selectStyle(style) {
   state.style = style;
@@ -159,6 +183,128 @@ function selectStyle(style) {
 document.querySelectorAll(".style-pill").forEach((btn) => {
   btn.addEventListener("click", () => selectStyle(btn.dataset.style));
 });
+
+// ============ 版本切换（普通 / Pro）：localStorage 持久化，影响新建会话 ============
+// 每个浏览器分配一个稳定匿名 user_id，用于「成长曲线 / 错题本」按用户隔离（多开互不串数据）
+const UID = (() => {
+  let id = localStorage.getItem("ie_uid");
+  if (!id) { id = "u_" + Math.random().toString(36).slice(2, 10); localStorage.setItem("ie_uid", id); }
+  return id;
+})();
+// 登录账户：登录后以账户名作为稳定 user_id（历史/错题跨设备一致）；未登录回退匿名 UID
+let ACCOUNT = (() => { try { return JSON.parse(localStorage.getItem("ie_user")); } catch { return null; } })();
+function userId() { return (ACCOUNT && ACCOUNT.username) || UID; }
+let currentTier = localStorage.getItem("ie_tier") || "normal";
+
+function renderTierToggle() {
+  document.querySelectorAll(".tier-opt").forEach((b) => {
+    const on = b.dataset.tier === currentTier;
+    b.classList.toggle("bg-amber-400/20", on);
+    b.classList.toggle("text-amber-200", on);
+    b.classList.toggle("text-slate-400", !on);
+  });
+}
+function setTier(t) {
+  currentTier = t === "pro" ? "pro" : "normal";
+  localStorage.setItem("ie_tier", currentTier);
+  renderTierToggle();
+  showHint(currentTier === "pro" ? "已切换到 Pro 版（更强模型 + 更深点评）" : "已切换到普通版");
+}
+document.querySelectorAll(".tier-opt").forEach((btn) => {
+  btn.addEventListener("click", () => setTier(btn.dataset.tier));
+});
+renderTierToggle();
+
+// ============ 登录 / 账户（多用户隔离入口）============
+function renderUser() {
+  const label = ACCOUNT ? (ACCOUNT.name + " · @" + ACCOUNT.username) : "游客";
+  const setupChip = document.getElementById("setupUserChip");
+  const chip = document.getElementById("userChip");
+  if (ACCOUNT) {
+    if (setupChip) { setupChip.textContent = "👤 " + label + "（退出）"; setupChip.classList.remove("hidden"); setupChip.onclick = logout; }
+    if (chip) { chip.textContent = "👤 " + label; chip.classList.remove("hidden"); chip.onclick = logout; }
+  } else {
+    if (setupChip) setupChip.classList.add("hidden");
+    if (chip) chip.classList.add("hidden");
+  }
+}
+
+function logout() {
+  ACCOUNT = null;
+  localStorage.removeItem("ie_user");
+  document.getElementById("loginModal").classList.remove("hidden");
+  renderUser();
+}
+
+async function doLogin(username, password) {
+  try {
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ username, password }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || "登录失败");
+    }
+    const d = await res.json();
+    ACCOUNT = { username: d.user_id, name: d.name };
+    localStorage.setItem("ie_user", JSON.stringify(ACCOUNT));
+    document.getElementById("loginModal").classList.add("hidden");
+    renderUser();
+    showHint("已登录：" + d.name + "，历史与错题将按账户隔离保存");
+  } catch (e) {
+    const err = document.getElementById("loginErr");
+    err.textContent = e.message;
+    err.classList.remove("hidden");
+  }
+}
+
+async function initLogin() {
+  // 拉取预置账户，渲染「一键登录」按钮（演示账户密码统一 pass123，直接登录）
+  try {
+    const res = await fetch("/api/accounts");
+    const data = await res.json();
+    const box = document.getElementById("accountQuick");
+    const accounts = data.accounts || [];
+    if (accounts.length) {
+      box.innerHTML = accounts.map((a) =>
+        `<button type="button" data-user="${escapeHtml(a.username)}" class="quick-login text-sm px-3 py-2.5 rounded-lg border border-white/10 hover:border-brand-500 bg-ink-700/50 flex items-center justify-between">
+           <span>${escapeHtml(a.name)}</span><span class="text-xs text-slate-500">@${escapeHtml(a.username)}</span>
+         </button>`).join("");
+      box.querySelectorAll(".quick-login").forEach((b) => {
+        b.addEventListener("click", () => doLogin(b.dataset.user, "pass123"));
+      });
+    } else {
+      box.innerHTML = '<div class="text-xs text-slate-500">暂无预置账户，请用上方账号密码登录</div>';
+    }
+  } catch (e) {
+    document.getElementById("accountQuick").innerHTML = '<div class="text-xs text-slate-500">加载账户列表失败</div>';
+  }
+
+  document.getElementById("loginBtn").addEventListener("click", () => {
+    document.getElementById("loginErr").classList.add("hidden");
+    doLogin(document.getElementById("loginUser").value.trim(), document.getElementById("loginPass").value);
+  });
+  document.getElementById("loginPass").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") document.getElementById("loginBtn").click();
+  });
+  document.getElementById("guestBtn").addEventListener("click", () => {
+    ACCOUNT = null;
+    localStorage.removeItem("ie_user");
+    document.getElementById("loginModal").classList.add("hidden");
+    renderUser();
+  });
+
+  if (ACCOUNT) {
+    document.getElementById("loginModal").classList.add("hidden");
+  } else {
+    document.getElementById("loginModal").classList.remove("hidden");
+  }
+  renderUser();
+}
+
+initLogin();
 
 async function startInterview(overrides = {}) {
   const resumeText = $("resumeText").value.trim();
@@ -177,9 +323,20 @@ async function startInterview(overrides = {}) {
   fd.append("resume_text", resumeText);
   fd.append("jd_text", jdText);
   fd.append("mode", mode);
+  const dirBtn = document.querySelector('.dir-pill[aria-pressed="true"]');
+  const uiDir = dirBtn ? dirBtn.dataset.dir : "auto";
+  const direction = overrides.direction || (uiDir !== "auto" ? uiDir : "");
+  if (direction) fd.append("direction", direction);
+  const probeEl = $("resumeProbe");
+  const probe = probeEl && !$("resumePreview").classList.contains("hidden")
+    ? probeEl.value.trim() : "";
+  if (probe) fd.append("resume_probe_points", probe);
   fd.append("style", state.style || "strict");
+  fd.append("tier", currentTier);
+  fd.append("user_id", userId());
   if (difficulty) fd.append("difficulty", difficulty);
   if (problemId) fd.append("problem_id", problemId);
+  if (direction) fd.append("direction", direction);
   // 若之前有进行中的会话，作为 previous 传回，后端会将其标记为「未完成」并落盘
   const prev = sessionStorage.getItem("lastSessionId");
   if (prev) fd.append("previous_session_id", prev);
@@ -190,6 +347,8 @@ async function startInterview(overrides = {}) {
     state.sessionId = data.session_id;
     state.stages = data.stages;
     state.currentStage = data.stage;
+    state.persona = data.persona;
+    state.tier = data.tier;
     sessionStorage.setItem("lastSessionId", data.session_id);
     localStorage.setItem("iv_session_id", data.session_id); // 供刷新/重开页面后恢复
 
@@ -256,6 +415,7 @@ function resumeInterview(st) {
   state.sessionId = st.session_id;
   state.stages = st.stages;
   state.currentStage = st.stage;
+  state.persona = st.persona;
   sessionStorage.setItem("lastSessionId", st.session_id);
 
   $("setup").classList.add("hidden");
@@ -351,6 +511,27 @@ function addMessage(role, animate = true) {
   inner.className = "markdown";
   bubble.appendChild(inner);
   wrap.appendChild(bubble);
+  // 八股环节：每条面试官提问可一键自评入错题本（八股无客观判题，用户自评更准）
+  if (role === "assistant" && state.currentStage === "quiz") {
+    wrap.classList.add("flex-col", "items-start");
+    const btn = document.createElement("button");
+    btn.className = "mt-1 text-[11px] text-red-300/80 hover:text-red-200 hover:underline";
+    btn.textContent = "📕 没答好？加入错题本";
+    btn.addEventListener("click", () => {
+      const q = (inner.innerText || "").trim();
+      if (!q) return;
+      const dir = (state.persona && state.persona.direction) || "";
+      btn.disabled = true;
+      btn.textContent = "提交中…";
+      fetch("/api/mistakes/quiz", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ direction: dir, question: q, user_id: userId() }),
+      }).then(() => { btn.textContent = "✅ 已加入错题本"; })
+        .catch(() => { btn.disabled = false; btn.textContent = "📕 没答好？加入错题本"; showHint("加入失败，请重试"); });
+    });
+    wrap.appendChild(btn);
+  }
   $("messages").appendChild(wrap);
   scrollBottom();
   return inner;
@@ -808,21 +989,13 @@ $("historyBtn").addEventListener("click", openHistory);
 $("historyBtnSetup").addEventListener("click", openHistory);
 $("closeHistory").addEventListener("click", closeHistory);
 
-// 报告导出 & 升级 Pro 占位
+// 报告导出
 $("exportMdBtn").addEventListener("click", exportMarkdown);
 $("exportPdfBtn").addEventListener("click", exportPDF);
 $("closeReport2").addEventListener("click", () => {
   $("reportModal").classList.add("hidden");
   $("reportModal").classList.remove("flex");
 });
-const proModal = $("proModal");
-$("proBtn").addEventListener("click", () => {
-  proModal.classList.remove("hidden"); proModal.classList.add("flex");
-  const c = proModal.querySelector(".modal-card");
-  c.classList.remove("modal-anim"); void c.offsetWidth; c.classList.add("modal-anim");
-});
-$("closePro").addEventListener("click", () => { proModal.classList.add("hidden"); proModal.classList.remove("flex"); });
-$("closePro2").addEventListener("click", () => { proModal.classList.add("hidden"); proModal.classList.remove("flex"); });
 
 $("expandEditorBtn").addEventListener("click", toggleEditorExpand);
 
@@ -837,7 +1010,7 @@ async function loadHistory() {
   const list = $("historyList");
   list.innerHTML = '<div class="text-slate-500 text-sm">加载中…</div>';
   try {
-    const res = await fetch("/api/history");
+    const res = await fetch("/api/history?user_id=" + encodeURIComponent(userId()));
     const data = await res.json();
     const records = data.records || [];
     renderHistoryStats(records);
@@ -874,6 +1047,35 @@ async function loadHistory() {
 }
 
 // ============ 成长曲线与薄弱点画像 ============
+
+// 纯 SVG 雷达图（零外部依赖，适配本机受限网络）：dims=[{name, avg}]，avg 取 0–5
+function renderRadar(dims) {
+  if (!dims.length) return '<div class="text-xs text-slate-500">暂无分项数据</div>';
+  const n = dims.length;
+  const size = 210, cx = size / 2, cy = size / 2, R = size / 2 - 30;
+  const ang = (i) => -Math.PI / 2 + (i * 2 * Math.PI) / n;
+  const pt = (i, r) => [cx + r * Math.cos(ang(i)), cy + r * Math.sin(ang(i))];
+  let grid = "";
+  [0.25, 0.5, 0.75, 1].forEach((f) => {
+    const poly = dims.map((_, i) => pt(i, R * f).map((v) => v.toFixed(1)).join(",")).join(" ");
+    grid += `<polygon points="${poly}" fill="none" stroke="#ffffff" stroke-opacity="0.10"/>`;
+  });
+  let axes = "";
+  dims.forEach((d, i) => {
+    const [x, y] = pt(i, R);
+    axes += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.14"/>`;
+    const [lx, ly] = pt(i, R + 15);
+    const anchor = Math.abs(lx - cx) < 6 ? "middle" : lx > cx ? "start" : "end";
+    axes += `<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" fill="#94a3b8" font-size="9" text-anchor="${anchor}">${escapeHtml(d.name)}</text>`;
+  });
+  const dataPts = dims.map((d, i) => pt(i, R * (d.avg / 5)).map((v) => v.toFixed(1)).join(",")).join(" ");
+  const dots = dims.map((d, i) => {
+    const [x, y] = pt(i, R * (d.avg / 5));
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.2" fill="#8ea2ff"/>`;
+  }).join("");
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" class="block mx-auto">${grid}${axes}<polygon points="${dataPts}" fill="#4f6ef7" fill-opacity="0.22" stroke="#4f6ef7" stroke-width="1.5"/>${dots}</svg>`;
+}
+
 function renderHistoryStats(records) {
   const box = $("historyStats");
   const done = records.filter((r) => !r.abandoned && r.score != null).reverse(); // 按时间正序
@@ -915,14 +1117,17 @@ function renderHistoryStats(records) {
   }));
   const dims = Object.keys(dimSum).map((k) => ({ name: k, avg: dimSum[k] / dimCnt[k] }));
   dims.sort((a, b) => a.avg - b.avg);
-  const dimHtml = dims.length ? dims.map((d) => `
+  const radarSvg = renderRadar(dims);
+  const dimHtml = dims.length
+    ? `<div class="flex justify-center mb-2">${radarSvg}</div>` + dims.map((d) => `
     <div class="flex items-center gap-2 text-xs">
       <span class="w-24 truncate text-slate-400">${escapeHtml(d.name)}</span>
       <div class="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
         <div class="h-full rounded-full ${d.avg < 3 ? "bg-red-400/80" : d.avg < 4 ? "bg-amber-400/80" : "bg-emerald-400/80"}" style="width:${(d.avg / 5 * 100).toFixed(0)}%"></div>
       </div>
       <span class="w-8 text-right ${d.avg < 3 ? "text-red-300" : "text-slate-300"}">${d.avg.toFixed(1)}</span>
-    </div>`).join("") : '<div class="text-xs text-slate-500">暂无分项数据</div>';
+    </div>`).join("")
+    : '<div class="text-xs text-slate-500">暂无分项数据</div>';
 
   // 薄弱标签（判题未通过题目的考察点）
   const tagCnt = {};
@@ -993,7 +1198,7 @@ async function renderMistakes() {
       <div id="mistakeBody"><div class="text-xs text-slate-500">加载中…</div></div>
     </div>`;
   try {
-    const res = await fetch("/api/mistakes");
+    const res = await fetch("/api/mistakes?user_id=" + encodeURIComponent(userId()));
     const data = await res.json();
     const ms = data.mistakes || [];
     const body = box.querySelector("#mistakeBody");
@@ -1003,8 +1208,21 @@ async function renderMistakes() {
       body.innerHTML = `<div class="mt-1 text-xs text-emerald-300/90">🎉 暂无错题，所有算法题都拿下了，继续保持！</div>`;
       return;
     }
-    body.innerHTML = `<div class="space-y-2">${ms.map((m) => `
-      <div class="flex items-center justify-between gap-3 rounded-lg border border-white/5 bg-ink-700/40 px-3 py-2">
+    body.innerHTML = `<div class="space-y-2">${ms.map((m) => {
+      if (m.type === "quiz" || !m.problem_id) {
+        return `<div class="flex items-start justify-between gap-3 rounded-lg border border-white/5 bg-ink-700/40 px-3 py-2">
+          <div class="min-w-0">
+            <div class="text-[11px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-200 w-fit mb-1">八股 · ${escapeHtml(m.direction || "通用")}</div>
+            <div class="text-sm text-slate-200 leading-snug">${escapeHtml(m.question)}</div>
+            <div class="text-xs text-slate-500 mt-0.5">累计错 ${m.wrong_times || 1} 次</div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <button class="mistake-practice-quiz text-xs px-3 py-1.5 rounded-lg bg-brand-500/90 hover:bg-brand-600 font-medium" data-dir="${escapeHtml(m.direction || "")}">重练</button>
+            <button class="mistake-del text-xs px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-red-400 hover:text-red-300" data-id="${escapeHtml(m.question)}">移除</button>
+          </div>
+        </div>`;
+      }
+      return `<div class="flex items-center justify-between gap-3 rounded-lg border border-white/5 bg-ink-700/40 px-3 py-2">
         <div class="min-w-0">
           <div class="text-sm truncate">${escapeHtml(m.title)} <span class="text-xs text-slate-500">（${escapeHtml(m.difficulty)}）</span></div>
           <div class="text-xs text-slate-500">上次 ${m.last_passed}/${m.last_total} 通过　·　累计错 ${m.wrong_times} 次${m.tags && m.tags.length ? "　·　" + m.tags.map(escapeHtml).join("、") : ""}</div>
@@ -1013,9 +1231,12 @@ async function renderMistakes() {
           <button class="mistake-practice text-xs px-3 py-1.5 rounded-lg bg-brand-500/90 hover:bg-brand-600 font-medium" data-id="${escapeHtml(m.problem_id)}">重练</button>
           <button class="mistake-del text-xs px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-red-400 hover:text-red-300" data-id="${escapeHtml(m.problem_id)}">移除</button>
         </div>
-      </div>`).join("")}</div>`;
+      </div>`;
+    }).join("")}</div>`;
     body.querySelectorAll(".mistake-practice").forEach((b) =>
       b.addEventListener("click", () => startPractice(b.dataset.id)));
+    body.querySelectorAll(".mistake-practice-quiz").forEach((b) =>
+      b.addEventListener("click", () => startPracticeQuiz(b.dataset.dir)));
     body.querySelectorAll(".mistake-del").forEach((b) =>
       b.addEventListener("click", () => deleteMistake(b.dataset.id)));
   } catch (e) {
@@ -1032,7 +1253,7 @@ async function startPractice(problemId) {
   // 重练前校验该题仍在错题本，避免「已消灭/不存在」却静默开随机题
   let useId = problemId;
   try {
-    const res = await fetch("/api/mistakes");
+    const res = await fetch("/api/mistakes?user_id=" + encodeURIComponent(userId()));
     const data = await res.json();
     const exists = (data.mistakes || []).some((m) => m.problem_id === problemId);
     if (!exists) {
@@ -1041,6 +1262,12 @@ async function startPractice(problemId) {
     }
   } catch (e) { /* 校验失败则按原 id 尝试，后端会兜底随机 */ }
   startInterview({ mode: "coding", problemId: useId });
+}
+
+async function startPracticeQuiz(direction) {
+  closeHistory();
+  selectMode("quiz");
+  startInterview({ mode: "quiz", direction: direction || "" });
 }
 
 async function deleteMistake(problemId) {
