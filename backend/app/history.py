@@ -10,7 +10,21 @@ import time
 import uuid
 import threading
 import contextlib
-import fcntl
+
+try:
+    import fcntl
+    _HAVE_FCNTL = True
+except ImportError:
+    _HAVE_FCNTL = False
+
+if _HAVE_FCNTL:
+    _HAVE_MSVCERT = False
+else:
+    try:
+        import msvcrt
+        _HAVE_MSVCERT = True
+    except ImportError:
+        _HAVE_MSVCERT = False
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
@@ -26,16 +40,26 @@ _WRITE_LOCK = threading.Lock()
 def _file_lock():
     """跨进程文件锁：多 uvicorn worker 并发写 JSON 时，避免读到半成品文件或互相覆盖。
 
-    说明：仅在本机（macOS / Linux）生效，依赖 fcntl.flock。Windows 下请单 worker 运行。
+    macOS / Linux 使用 fcntl.flock；Windows 使用 msvcrt 文件锁；均无则退化为
+    进程内串行（单 worker 下安全，与 _WRITE_LOCK 配合）。
     """
     os.makedirs(DATA_DIR, exist_ok=True)
     lock_path = os.path.join(DATA_DIR, ".json_write.lock")
     with open(lock_path, "w", encoding="utf-8") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        try:
+        if _HAVE_FCNTL:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+        elif _HAVE_MSVCERT:
+            msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
             yield
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
 
 
 def _ensure_file():
