@@ -27,11 +27,13 @@ LIVE_DIR = os.path.join(history_store.DATA_DIR, "live_sessions")
 # 面试模式 → 阶段流程（定向练习只走对应环节 + 报告）
 MODE_FLOWS = {
     "full": STAGE_ORDER,
+    # 非技术岗完整面试：自我介绍 → 经历深挖 → 专业问答 → 报告（无代码环节）
+    "no_code": [Stage.GREETING, Stage.PROJECT, Stage.QUIZ, Stage.REPORT],
     "coding": [Stage.CODING, Stage.REPORT],
     "quiz": [Stage.QUIZ, Stage.REPORT],
     "project": [Stage.PROJECT, Stage.REPORT],
 }
-MODE_LABELS = {"full": "完整面试", "coding": "只练手撕代码",
+MODE_LABELS = {"full": "完整面试", "no_code": "非技术岗面试", "coding": "只练手撕代码",
                "quiz": "只练专业八股", "project": "只练项目深挖"}
 
 # 每个环节允许的最大「候选人发言轮次」，超过则强制推进，避免面试卡死
@@ -180,14 +182,22 @@ class Session:
             self.coding_phase = "present"
 
     # ---------- 公共流式：产出可见 token，返回(可见全文, memo, control) ----------
-    def _stream_llm(self, user_message: Optional[str]):
-        """生成器：yield 可见 token 事件；结束时通过 StopIteration.value 返回解析结果。"""
+    def _stream_llm(self, user_message: Optional[str], cancel=None):
+        """生成器：yield 可见 token 事件；结束时通过 StopIteration.value 返回解析结果。
+
+        cancel：可选的可调用对象（如 threading.Event.is_set），返回 True 时在
+        token 间隙协作式中断生成（语音模式打断用）；已产出的部分内容仍会被解析保留。
+        """
         messages = self._build_messages(user_message)
         full = ""
         sent = 0
         found_sep = False
+        cancelled = False
         keep = len(prompts.SEP_MEMO) + 2  # 尾部保护，避免分隔符被截断误发
         for delta in llm.chat_stream(messages, model=self.model):
+            if cancel is not None and cancel():
+                cancelled = True
+                break
             full += delta
             if not found_sep:
                 cut = full.find(prompts.SEP_MEMO)
@@ -206,20 +216,22 @@ class Session:
             # found_sep 后只累加 full，不再向用户发送可见 token
         # 流式正常结束时，补发尾部保护预留的最后一段可见内容；
         # 仅当未遇到分隔符时才补发，避免把隐藏的 memo/control 暴露给用户。
-        if not found_sep and sent < len(full):
+        if not cancelled and not found_sep and sent < len(full):
             yield {"type": "token", "text": full[sent:]}
-        return self._parse_reply(full)
+        visible, memo, control = self._parse_reply(full)
+        return visible, memo, control, cancelled
 
     # ---------- 对外：流式对话 ----------
-    def stream_reply(self, user_message: Optional[str]) -> Iterator[dict]:
+    def stream_reply(self, user_message: Optional[str], cancel=None) -> Iterator[dict]:
         """产出事件字典：token / stage / problem / report_start / done。
 
         全程持有 self._lock，串行化同一会话的并发请求，防止 history/stage 竞争。
+        cancel：可选可调用对象，返回 True 时在 token 间隙协作式中断（语音打断用）。
         """
         with self._lock:
-            yield from self._stream_reply_locked(user_message)
+            yield from self._stream_reply_locked(user_message, cancel=cancel)
 
-    def stream_code_submission(self, code: str, language: str) -> Iterator[dict]:
+    def stream_code_submission(self, code: str, language: str, cancel=None) -> Iterator[dict]:
         """提交代码：先沙箱自动判题（客观），再把代码+判题结果交给面试官评价。"""
         with self._lock:
             judge_result = None
@@ -246,9 +258,9 @@ class Session:
                     "\n\n【系统自动判题结果（沙箱真实运行，客观事实，候选人界面上同样可见）】\n"
                     + summary
                 )
-            yield from self._stream_reply_locked(msg)
+            yield from self._stream_reply_locked(msg, cancel=cancel)
 
-    def _stream_reply_locked(self, user_message: Optional[str]) -> Iterator[dict]:
+    def _stream_reply_locked(self, user_message: Optional[str], cancel=None) -> Iterator[dict]:
         if user_message:
             self.history.append({"role": "user", "content": user_message})
             prompt_input = None  # 已写入 history
@@ -258,18 +270,25 @@ class Session:
         else:
             # 定向练习「只练代码」：开场即出题，不走寒暄
             if self.stage == Stage.CODING and self.current_problem is None:
-                yield from self._auto_present_problem()
+                yield from self._auto_present_problem(cancel=cancel)
                 self._persist_live()
                 yield {"type": "done"}
                 return
             prompt_input = "（面试开始，请你作为面试官开场）"  # 开场触发
 
-        gen = self._stream_llm(prompt_input)
-        visible, memo, control = yield from gen
+        gen = self._stream_llm(prompt_input, cancel=cancel)
+        visible, memo, control, cancelled = yield from gen
 
         self.history.append({"role": "assistant", "content": visible})
         if memo:
             self.memo.append(f"[{STAGE_LABELS[self.stage]}] {memo}")
+        if cancelled:
+            # 语音打断：只保留已生成的部分回复，不做阶段推进（control 可能不完整），
+            # 并告知面试官「上一条被候选人打断了」，下轮回复更自然。
+            self.memo.append("[系统]上一条回复被候选人中途打断，未说完；请自然衔接候选人的新发言。")
+            self._persist_live()
+            yield {"type": "done"}
+            return
 
         # 阶段推进：每轮最多推进一个阶段，避免模型一次回复发多个 next_stage
         # 把中间环节整个跳过（每个阶段都应有一次真实交互）；同时支持轮次兜底强制推进。
@@ -288,22 +307,22 @@ class Session:
                    "label": STAGE_LABELS.get(self.stage, "")}
             advanced_this_turn = True
             if self.stage == Stage.CODING:
-                yield from self._auto_present_problem()
+                yield from self._auto_present_problem(cancel=cancel)
             elif self.stage == Stage.REPORT:
-                yield from self._generate_report()
+                yield from self._generate_report(cancel=cancel)
             # 只推进一次：跳出循环，剩余 next_stage 留待后续轮次
             break
 
         self._persist_live()  # 每轮结束落盘，服务重启后可恢复
         yield {"type": "done"}
 
-    def _auto_present_problem(self) -> Iterator[dict]:
+    def _auto_present_problem(self, cancel=None) -> Iterator[dict]:
         """进入 coding 环节后自动出题。"""
         self.current_problem = self._pick()
         self.used_problem_ids.append(self.current_problem["id"])
         self.coding_phase = "present"
-        gen = self._stream_llm("（请正式把这道算法题出给候选人，题面展示清楚）")
-        visible, memo, _ = yield from gen
+        gen = self._stream_llm("（请正式把这道算法题出给候选人，题面展示清楚）", cancel=cancel)
+        visible, memo, _, _cancelled = yield from gen
         self.history.append({"role": "assistant", "content": visible})
         if memo:
             self.memo.append(f"[算法手撕] {memo}")
@@ -316,7 +335,7 @@ class Session:
             "judgeable": bool(p.get("tests")),
         }}
 
-    def _generate_report(self) -> Iterator[dict]:
+    def _generate_report(self, cancel=None) -> Iterator[dict]:
         # 防止重复生成报告（兜底强制推进/客户端重连可能再次触发）
         if self._report_done or self.stage == Stage.FINISHED:
             return
@@ -336,13 +355,19 @@ class Session:
             for j in self.judge_results
         ) or "（本场无自动判题记录）"
         prompt = prompts.report_prompt(
-            self.persona, self.resume, self.jd, transcript, memo_text, judge_text, style=self.style
+            self.persona, self.resume, self.jd, transcript, memo_text, judge_text,
+            style=self.style, direction=self.persona.get("direction"),
         )
         yield {"type": "report_start"}
         report_text = ""
         for delta in llm.chat_stream([{"role": "user", "content": prompt}], temperature=0.4, model=self.model):
+            if cancel is not None and cancel():
+                break  # 语音打断：报告已被打断，不保存半成品（下轮可重新触发生成）
             report_text += delta
             yield {"type": "token", "text": delta, "channel": "report"}
+        if cancel is not None and cancel():
+            self._report_done = False  # 允许后续轮次重新生成完整报告
+            return
         self.report_text = report_text
         self.score, self.verdict = self._parse_score(report_text)
         self.dimensions = self._parse_dimensions(report_text)

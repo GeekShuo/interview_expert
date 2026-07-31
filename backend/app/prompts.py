@@ -36,7 +36,7 @@ def style_line(style: str) -> str:
 
 
 # 通用面试官行为准则
-BASE_RULES = f"""你是一名资深的算法岗面试官，正在对一位【应届生/实习】候选人进行真实的技术面试。
+BASE_RULES = f"""你是一名资深的面试官，正在对一位候选人进行真实、专业的面试。
 
 【硬性行为准则】
 - 全程使用简体中文，语气专业、简洁、真实，像真人面试官，不要客套废话。
@@ -161,9 +161,33 @@ def quiz_prompt(persona: dict, jd: dict, questions: str) -> str:
 """
 
 
+# 报告分项维度：技术岗默认含「算法与编码」；非技术岗替换为对应岗位维度
+DEFAULT_DIMENSIONS = ["专业能力", "项目深度与真实性", "算法与编码", "专业基础（八股）", "表达与逻辑"]
+ROLE_DIMENSIONS = {
+    "销售": ["目标感与抗压", "客户洞察与需求挖掘", "沟通表达与谈判", "行业与产品理解", "案例真实性"],
+    "采销": ["成本与供应链理解", "议价与谈判能力", "数据分析与选品判断", "供应商与渠道管理", "案例真实性"],
+    "产品经理": ["用户洞察与需求分析", "产品设计与逻辑思维", "数据分析能力", "跨团队协作与推进", "案例真实性"],
+}
+
+
+def dimensions_for(direction: str) -> list:
+    return ROLE_DIMENSIONS.get(direction, DEFAULT_DIMENSIONS)
+
+
 def report_prompt(persona: dict, resume: dict, jd: dict, transcript: str, memo: str,
-                  judge: str = "（无）", style: str = "strict") -> str:
-    return f"""你是资深算法岗面试官 {persona['name']}，刚刚结束了一场对应届生/实习候选人的完整面试。
+                  judge: str = "（无）", style: str = "strict", direction: str = None) -> str:
+    dims = dimensions_for(direction)
+    coding_assessed = "算法与编码" in dims
+    dims_block = "\n".join(f"- **{d}**：x/5 —— 理由" for d in dims)
+    if coding_assessed:
+        judge_note = "【代码自动判题结果（沙箱真实运行，客观事实，评「算法与编码」分项时必须以此为准）】"
+        practice_line = ("- **推荐练习题目**（列 5-8 道 LeetCode 题号+题名；若自动判题有未通过的题，必须优先围绕\n"
+                         "  该题「考察标签」选同类题针对性补强，并注明\"因为你在 XX 题上 x/y 未通过\"）")
+    else:
+        judge_note = "【代码自动判题结果】（本场未考察编码，此项为空，请忽略，不要臆测）"
+        practice_line = ("- **推荐练习方向**（结合本场暴露的短板，列出 3-6 个可落地的练习/学习方向，"
+                         "如情景演练、行业知识、数据方法等，并说明对应哪条薄弱证据）")
+    return f"""你是资深面试官 {persona['name']}（{persona['title']}），刚刚结束了一场对候选人的完整面试。
 现在请基于【完整面试记录】、你的【面试笔记】和【代码自动判题结果】，输出一份专业、犀利、有证据的面试评估报告。
 
 # 面试总分
@@ -174,7 +198,7 @@ def report_prompt(persona: dict, resume: dict, jd: dict, transcript: str, memo: 
 【面试笔记（你在面试中的隐藏记录）】
 {memo}
 
-【代码自动判题结果（沙箱真实运行，客观事实，评「算法与编码」分项时必须以此为准）】
+{judge_note}
 {judge}
 
 【完整面试记录】
@@ -189,11 +213,7 @@ def report_prompt(persona: dict, resume: dict, jd: dict, transcript: str, memo: 
 （3-4 句总体判断 + 是否推荐通过的倾向）
 
 ## 二、分项评分（每项 1-5 分并说明理由，附证据）
-- **专业能力**：x/5 —— 理由
-- **项目深度与真实性**：x/5 —— 理由
-- **算法与编码**：x/5 —— 理由
-- **专业基础（八股）**：x/5 —— 理由
-- **表达与逻辑**：x/5 —— 理由
+{dims_block}
 
 ## 三、亮点
 （列举 2-3 条，引用具体表现）
@@ -207,8 +227,7 @@ def report_prompt(persona: dict, resume: dict, jd: dict, transcript: str, memo: 
 ## 六、可执行提升计划（本报告最有价值的部分，务必具体）
 基于本场暴露的薄弱点，给出一份候选人拿来就能执行的提升计划：
 - **优先补齐的知识点**（列 3-5 个，每个附 1 句"薄弱证据"，来自本场表现）
-- **推荐练习题目**（列 5-8 道 LeetCode 题号+题名；若自动判题有未通过的题，必须优先围绕
-  该题「考察标签」选同类题针对性补强，并注明"因为你在 XX 题上 x/y 未通过"）
+{practice_line}
 - **7 天冲刺安排**（按天列出：Day1-7 每天练什么、看什么，量化到题数/知识点数）
 - **下次面试前自检清单**（3-5 条 checkbox，如"能不看资料手写 XX"）
 

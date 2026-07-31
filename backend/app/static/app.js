@@ -38,6 +38,97 @@ voiceIn.onAutoStop = (txt) => {
   sendMessage();
 };
 
+// ============ 云端语音（WebSocket ASR+TTS 全双工，优先于浏览器原生语音）============
+let cloudAvail = false;   // 服务端是否配置了语音供应商
+function cloudActive() { return voiceMode && cloudAvail && cloudVoice.connected; }
+
+cloudVoice.detect().then((ok) => {
+  cloudAvail = ok;
+  const label = $("voiceModeLabel");
+  if (!label) return;
+  const names = { aliyun: "阿里", volcengine: "火山", mock: "本地调试" };
+  label.title = ok
+    ? `云端语音（${names[cloudVoice.cfg.provider] || cloudVoice.cfg.provider}）：全双工对话，面试官说话时可随时开口打断`
+    : "未配置云端语音（浏览器原生语音兜底）：面试官自动朗读，读完自动开麦，静音自动发送";
+});
+
+// 云端语音状态 → 麦克风/状态条 UI
+cloudVoice.onStateChange = (s) => {
+  const st = $("voiceStatus");
+  if (s === "listening") {
+    setMicUI(true);
+    st.textContent = "🎧 聆听中，直接说话…";
+    st.classList.remove("hidden");
+  } else if (s === "speaking") {
+    st.textContent = "🔊 面试官说话中（可随时开口打断）";
+    st.classList.remove("hidden");
+  } else {
+    setMicUI(false);
+    st.classList.add("hidden");
+  }
+};
+
+// 云端语音事件 → 复用现有对话渲染（与 SSE 事件同一套处理）
+let cloudInner = null;
+let cloudAcc = "";
+cloudVoice.onEvent = (ev) => {
+  switch (ev.type) {
+    case "asr_partial":  // 语音实时转写预览
+      $("userInput").value = ev.text;
+      autoGrow();
+      break;
+    case "asr_final":    // 一句说完：上屏为用户消息（回复由服务端自动发起）
+      $("userInput").value = "";
+      autoGrow();
+      renderUserMessage(ev.text);
+      break;
+    case "turn_start":
+      cloudInner = addMessage("assistant");
+      cloudInner.parentElement.classList.add("cursor-blink");
+      cloudAcc = "";
+      state.streaming = true;
+      $("stopBtn").classList.remove("hidden");
+      break;
+    case "token":
+      if (ev.channel === "report") { handleReportToken(ev.text); break; }
+      if (cloudInner) {
+        cloudAcc += ev.text;
+        cloudInner.innerHTML = safeMd(cloudAcc);
+        scrollBottom();
+      }
+      break;
+    case "stage": addSystemNote("进入环节：" + ev.label); setStage(ev.stage); break;
+    case "problem": renderProblem(ev.problem); break;
+    case "judge": renderJudgeResult(ev.result); break;
+    case "report_start": handleReportToken("", true); break;
+    case "turn_end":
+      if (cloudInner) cloudInner.parentElement.classList.remove("cursor-blink");
+      cloudInner = null;
+      cloudAcc = "";
+      state.streaming = false;
+      $("stopBtn").classList.add("hidden");
+      break;
+    case "error":
+      showToast(ev.message || "语音服务异常");
+      break;
+  }
+};
+
+// 恢复语音模式偏好（开始/恢复面试时调用）：开启并按需连接云端语音
+async function ensureVoiceMode() {
+  if (localStorage.getItem("ie_voice_mode") !== "1") return;
+  $("voiceModeToggle").checked = true;
+  voiceMode = true;
+  voiceOut.enabled = true;
+  if (cloudAvail && state.sessionId && !cloudVoice.connected) {
+    try {
+      await cloudVoice.connect(state.sessionId);
+    } catch (e) {
+      showToast("云端语音连接失败：" + (e.message || e) + "，回退浏览器原生语音");
+    }
+  }
+}
+
 function setMicUI(active) {
   const btn = $("micBtn");
   const status = $("voiceStatus");
@@ -56,20 +147,45 @@ function setMicUI(active) {
 }
 
 // 语音模式开关
-$("voiceModeToggle").addEventListener("change", (e) => {
+$("voiceModeToggle").addEventListener("change", async (e) => {
   voiceMode = e.target.checked;
   voiceOut.enabled = true;
-  if (!voiceIn.supported && voiceMode) {
-    showToast("当前浏览器不支持语音识别，请使用 Chrome 或 Edge");
+  localStorage.setItem("ie_voice_mode", voiceMode ? "1" : "0");
+  if (voiceMode) {
+    if (cloudAvail && state.sessionId && !cloudVoice.connected) {
+      try {
+        await cloudVoice.connect(state.sessionId);
+      } catch (err) {
+        showToast("云端语音连接失败：" + (err.message || err) + "，回退浏览器原生语音");
+      }
+    } else if (!cloudAvail && !voiceIn.supported) {
+      showToast("当前浏览器不支持语音识别，请使用 Chrome 或 Edge");
+    }
   }
   if (!voiceMode) {
     voiceOut.cancel();
     voiceIn.stop();
+    cloudVoice.disconnect();
+    setMicUI(false);
   }
 });
 
-// 麦克风按钮：手动开/关（关闭时若已识别到内容则发送）
+// 麦克风按钮：云端模式=静音/恢复；浏览器模式=手动开/关（关闭时若已识别到内容则发送）
 $("micBtn").addEventListener("click", () => {
+  if (cloudActive()) {
+    const muted = cloudVoice.toggleMute();
+    const st = $("voiceStatus");
+    if (muted) {
+      setMicUI(false);
+      st.textContent = "🔇 已静音，点击麦克风恢复";
+      st.classList.remove("hidden");
+    } else {
+      setMicUI(true);
+      st.textContent = "🎧 聆听中，直接说话…";
+      st.classList.remove("hidden");
+    }
+    return;
+  }
   if (!voiceIn.supported) {
     showToast("当前浏览器不支持语音识别，请使用 Chrome 或 Edge");
     return;
@@ -84,9 +200,9 @@ $("micBtn").addEventListener("click", () => {
   }
 });
 
-// 语音模式下：面试官回复读完后自动开麦听用户
+// 语音模式下：面试官回复读完后自动开麦听用户（仅浏览器原生语音路径；云端为全双工常听）
 function startListeningTurn() {
-  if (!voiceMode || !voiceIn.supported) return;
+  if (!voiceMode || !voiceIn.supported || cloudActive()) return;
   if (state.streaming || voiceIn.listening) return;
   voiceIn.start();
 }
@@ -146,7 +262,8 @@ function selectMode(mode) {
     b.setAttribute("aria-pressed", on ? "true" : "false");
   });
   $("difficultyRow").classList.toggle("hidden", mode !== "coding");
-  $("directedNote").classList.toggle("hidden", mode === "full");
+  // 「可不填简历/JD」提示仅对定向练习（coding/quiz/project）显示；full 与 no_code 都按完整面试填简历/JD
+  $("directedNote").classList.toggle("hidden", !["coding", "quiz", "project"].includes(mode));
 }
 document.querySelectorAll(".mode-pill").forEach((btn) => {
   btn.addEventListener("click", () => selectMode(btn.dataset.mode));
@@ -312,7 +429,7 @@ async function startInterview(overrides = {}) {
   const mode = overrides.mode || state.mode || "full";
   const difficulty = overrides.difficulty || $("difficultySelect")?.value || "";
   const problemId = overrides.problemId || "";
-  if (mode === "full" && !jdText) {
+  if ((mode === "full" || mode === "no_code") && !jdText) {
     showHint("请至少填写目标岗位 JD");
     return;
   }
@@ -370,6 +487,9 @@ async function startInterview(overrides = {}) {
     if (data.resume_summary) {
       addSystemNote("📄 面试官已读简历，理解为：" + truncate(data.resume_summary, 100));
     }
+
+    // 恢复语音模式偏好（开启时开场白直接走语音通道）
+    await ensureVoiceMode();
 
     // 拉开场白
     streamOpening();
@@ -441,6 +561,7 @@ function resumeInterview(st) {
     setStage(st.stage);
   }
   scrollBottom();
+  ensureVoiceMode(); // 恢复语音模式（fire-and-forget）
 }
 
 checkResumable();
@@ -608,6 +729,12 @@ async function streamSSE(url, options, { onToken, onReport, onStage, onProblem, 
 
 // 开场白
 async function streamOpening() {
+  if (cloudActive()) {
+    // 云端语音：开场白经 WS 走 LLM+TTS，气泡由 turn_start/token 事件驱动
+    state.streaming = true;
+    cloudVoice.sendOpening();
+    return;
+  }
   const inner = addMessage("assistant");
   inner.parentElement.classList.add("cursor-blink");
   let acc = "";
@@ -651,6 +778,11 @@ $("userInput").addEventListener("keydown", (e) => {
 
 // 停止当前正在进行的流式生成（开场白 / 面试官回复）
 $("stopBtn").addEventListener("click", () => {
+  if (cloudActive() && state.streaming) {
+    cloudVoice.interrupt(); // 打断：停播 + 取消服务端 LLM/TTS 轮次
+    addSystemNote("⏹ 已打断面试官");
+    return;
+  }
   if (state.abort) {
     state.abort.abort();
     voiceOut.cancel(); // 停掉残留朗读
@@ -660,9 +792,20 @@ $("stopBtn").addEventListener("click", () => {
 
 async function sendMessage() {
   const text = $("userInput").value.trim();
-  if (!text || state.streaming) return;
+  if (!text) return;
+  if (state.streaming && !cloudActive()) return; // 云端语音下打字也算打断，不阻塞
   if (state.currentStage === "finished") {
     addSystemNote("面试已结束，点击「重新开始」可再开一场");
+    return;
+  }
+  if (cloudActive()) {
+    // 云端语音：文字消息走 WS（面试官语音回复），服务端自动打断当前轮次
+    cloudVoice.interrupt();
+    $("userInput").value = "";
+    autoGrow();
+    renderUserMessage(text);
+    state.streaming = true;
+    cloudVoice.sendText(text);
     return;
   }
   if (voiceIn.listening) voiceIn.stop();
@@ -843,10 +986,17 @@ function renderJudgeResult(res) {
 }
 
 $("submitCodeBtn").addEventListener("click", async () => {
-  if (!state.editor || state.streaming) return;
+  if (!state.editor) return;
+  if (state.streaming && !cloudActive()) return;
   const code = state.editor.getValue();
   const lang = $("langSelect").value;
   addMessage("user").innerHTML = safeMd("已提交代码：\n```" + lang + "\n" + code + "\n```");
+  if (cloudActive()) {
+    // 云端语音：判题+点评走 WS，面试官语音反馈
+    state.streaming = true;
+    cloudVoice.sendCode(code, lang);
+    return;
+  }
 
   const inner = addMessage("assistant");
   inner.parentElement.classList.add("cursor-blink");

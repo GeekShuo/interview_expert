@@ -45,6 +45,7 @@
         <label class="block text-sm font-medium text-slate-300 mb-2">🎛 练习模式</label>
         <div id="modePills" role="radiogroup" aria-label="练习模式" class="flex flex-wrap gap-2 text-sm">
           <button type="button" role="radio" aria-pressed="true" data-mode="full" class="mode-pill px-4 py-2 rounded-lg border transition border-brand-500 bg-brand-500/20 text-brand-100">🎯 完整面试</button>
+          <button type="button" role="radio" aria-pressed="false" data-mode="no_code" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">💼 非技术岗面试</button>
           <button type="button" role="radio" aria-pressed="false" data-mode="coding" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">💻 只练手撕代码</button>
           <button type="button" role="radio" aria-pressed="false" data-mode="quiz" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">📖 只练专业八股</button>
           <button type="button" role="radio" aria-pressed="false" data-mode="project" class="mode-pill px-4 py-2 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">🗂 只练项目深挖</button>
@@ -60,6 +61,9 @@
             <button type="button" role="radio" aria-pressed="false" data-dir="机器学习" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">📊 机器学习</button>
             <button type="button" role="radio" aria-pressed="false" data-dir="深度学习" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">🧠 深度学习</button>
             <button type="button" role="radio" aria-pressed="false" data-dir="通用算法" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">⚙️ 通用</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="销售" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">💼 销售</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="采销" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">📦 采销</button>
+            <button type="button" role="radio" aria-pressed="false" data-dir="产品经理" class="dir-pill px-3 py-1.5 rounded-lg border transition border-white/10 text-slate-400 hover:border-brand-500/50">🧩 产品经理</button>
           </div>
         </div>
         <div id="difficultyRow" class="hidden mt-3 flex items-center gap-2 text-sm">
@@ -295,6 +299,7 @@
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="/static/voice.js"></script>
+  <script src="/static/voice2.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

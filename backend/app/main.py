@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -11,6 +11,7 @@ from . import parser
 from . import history as history_store
 from . import mistakes as mistakes_store
 from . import accounts as accounts_store
+from . import voice
 from .config import settings
 from .schemas import ChatRequest, CodeSubmitRequest, STAGE_LABELS
 from .schemas import Stage
@@ -111,8 +112,9 @@ async def start_interview(
             prev.abandon()
     if mode not in sess.MODE_FLOWS:
         mode = "full"
-    # 定向练习允许不填简历/JD，用占位文本保证 prompt 完整
-    if mode != "full":
+    # 定向练习（coding/quiz/project）允许不填简历/JD，用占位文本保证 prompt 完整；
+    # full 与 no_code 都是完整面试，使用候选人真实简历/JD
+    if mode in ("coding", "quiz", "project"):
         resume_text = resume_text.strip() or "（定向练习模式，候选人未提供简历，请勿追问简历细节）"
         jd_text = jd_text.strip() or "算法工程师（定向练习）"
     s = sess.create_session(resume_text, jd_text, mode=mode,
@@ -264,6 +266,38 @@ def delete_mistake(problem_id: str):
     if not ok:
         raise HTTPException(404, "错题不存在")
     return {"ok": True}
+
+
+# ---------- 云端语音（ASR + TTS）----------
+@app.get("/api/voice/config")
+def voice_config():
+    """告知前端云端语音是否可用及音频参数；不可用时前端回退浏览器原生语音。"""
+    return voice.voice_config_payload()
+
+
+@app.websocket("/ws/voice/{session_id}")
+async def voice_ws(ws: WebSocket, session_id: str):
+    """语音面试全双工通道：麦克风 PCM 上行，面试官 TTS PCM 下行 + 对话事件。"""
+    await ws.accept()
+    s = sess.get_session(session_id)
+    provider = voice.get_voice_provider()
+    if s is None:
+        await ws.send_text('{"type":"error","message":"会话不存在或已结束"}')
+        await ws.close(code=4004)
+        return
+    if provider is None:
+        await ws.send_text('{"type":"error","message":"服务端未配置语音供应商"}')
+        await ws.close(code=4003)
+        return
+    from .voice.pipeline import VoiceSession
+    try:
+        await VoiceSession(ws, s, provider).run()
+    except Exception:
+        # 连接异常退出：尽力通知客户端后关闭，避免悬挂
+        try:
+            await ws.close(code=1011)
+        except Exception:
+            pass
 
 
 # ---------- 静态前端 ----------
