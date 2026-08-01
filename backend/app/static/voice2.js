@@ -19,6 +19,8 @@ class CloudVoiceClient {
     this._nextT = 0;            // 播放队列下一个可调度时刻
     this._activeSources = new Set();
     this._loudFrames = 0;       // 连续高能量帧计数（打断判定）
+    this._playSince = 0;        // 本轮播放起始时刻（起始 500ms 内不做打断判定，AEC 收敛期回声最强）
+    this._lastInterrupt = 0;    // 上次打断时刻（打断后 1.2s 冷却，避免抖动连发）
 
     // 回调（由 app.js 赋值）
     this.onEvent = null;        // (ev) => {}  服务端 JSON 事件
@@ -104,14 +106,20 @@ class CloudVoiceClient {
   }
 
   _onMicFrame({ pcm, rms }) {
-    // 本地打断判定：面试官音频播放中，检测到 ~80ms 以上持续人声 → barge-in
+    // 本地打断判定（barge-in）：面试官音频播放中，检测到持续人声才触发——
+    // 门槛：RMS>0.06 且持续 ~160ms（20 帧）以上，且避开播放起始 500ms 与打断后 1.2s 冷却，
+    // 咳嗽/键盘声/呼吸声等短促小噪音不会误触发。
     if (this.playing) {
-      if (rms > 0.04) {
-        if (++this._loudFrames >= 10) {
+      const now = performance.now();
+      const guarded = (this._playSince && now - this._playSince < 500) ||
+                      (this._lastInterrupt && now - this._lastInterrupt < 1200);
+      if (!guarded && rms > 0.06) {
+        if (++this._loudFrames >= 20) {
           this._loudFrames = 0;
+          this._lastInterrupt = now;
           this.interrupt();
         }
-      } else {
+      } else if (rms <= 0.06) {
         this._loudFrames = 0;
       }
     }
@@ -125,6 +133,7 @@ class CloudVoiceClient {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!this.playCtx) this.playCtx = new AC();
     if (this.playCtx.state === "suspended") this.playCtx.resume();
+    if (!this.playing) this._playSince = performance.now(); // 新一轮播放起始（打断保护窗口）
     const n = buf.byteLength >> 1;
     if (!n) return;
     const i16 = new Int16Array(buf);
@@ -150,6 +159,7 @@ class CloudVoiceClient {
     this._activeSources.forEach((s) => { try { s.stop(); } catch (_) {} });
     this._activeSources.clear();
     this._nextT = 0;
+    this._playSince = 0;
     if (this.connected) this._setState("listening");
   }
 

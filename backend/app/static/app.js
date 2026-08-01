@@ -88,11 +88,17 @@ cloudVoice.onEvent = (ev) => {
       renderUserMessage(ev.text);
       break;
     case "turn_start":
+      $("userInput").value = ""; // 清掉面试官说话期间回声/噪音产生的误识别残留
+      autoGrow();
       cloudInner = addMessage("assistant");
       cloudInner.parentElement.classList.add("cursor-blink");
       cloudAcc = "";
       state.streaming = true;
       $("stopBtn").classList.remove("hidden");
+      break;
+    case "notice":  // 服务端正向提示（如「语音识别已恢复」）
+      $("voiceStatus").textContent = ev.message;
+      $("voiceStatus").classList.remove("hidden");
       break;
     case "token":
       if (ev.channel === "report") { handleReportToken(ev.text); break; }

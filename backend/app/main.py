@@ -24,6 +24,18 @@ from .config import settings
 from .schemas import ChatRequest, CodeSubmitRequest, STAGE_LABELS
 from .schemas import Stage
 
+import logging as _logging
+
+# 语音模块日志：uvicorn 默认不给第三方 logger 挂 handler，这里单独配置
+# （输出到 stderr，随服务日志一起采集；一轮一行，量级可控）
+_vlog = _logging.getLogger("interview_expert")
+if not _vlog.handlers:
+    _h = _logging.StreamHandler()
+    _h.setFormatter(_logging.Formatter("VOICE %(levelname)s: %(message)s"))
+    _vlog.addHandler(_h)
+    _vlog.setLevel(_logging.INFO)
+    _vlog.propagate = False
+
 app = FastAPI(title="AI 模拟面试系统")
 
 STATIC_DIR = Path(__file__).parent / "static"
