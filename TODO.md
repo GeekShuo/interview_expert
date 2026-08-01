@@ -51,7 +51,8 @@
 - [ ] **报告导出**：PDF / 图片分享
 - [ ] **面试官风格开关**（压力面 / 宽松面）：后端 `style=strict|warm|pressure` 已支持，需前端补 UI
 - [ ] **付费点设计**：免费 N 场 → 深度报告 / 无限场次 / 定向练习收费（先做本地开关占位）
-- [ ] 时间感、引导空状态、（可选）语音 ASR+TTS
+- [ ] 时间感、引导空状态
+- [x] **云端语音面试（ASR + TTS + 打断，2026-08-01）**：新增 `app/voice/` 语音层——Provider 抽象（`base.py`）+ 阿里百炼（`aliyun.py`，Fun-ASR-Realtime + CosyVoice，dashscope SDK 懒加载）+ 火山引擎（`volcengine.py`，豆包 TTS ws_binary + SAUC 流式 ASR 二进制协议，纯 WebSocket 无 SDK）+ mock 联调实现；`/ws/voice/{session_id}` 全双工管道（`pipeline.py`）：麦克风 PCM 上行 → 流式 ASR → 复用现有 Session 状态机 → LLM token 分句 → 流式 TTS → PCM 下行；**barge-in 打断**：前端本地能量 VAD + 服务端 ASR-final 双路触发，session 级协作式取消（`stream_reply/stream_code_submission` 新增 `cancel` 参数），被打断轮次写入 memo 供面试官自然衔接；前端 `voice2.js`（AudioWorklet 采集 16k PCM + AEC 回声消除 + 流式 PCM 播放队列）接入现有语音模式开关，云端不可用时自动回退浏览器原生语音；配置走 `.env`（`VOICE_PROVIDER` + 两套密钥模板见 `.env.example`），`GET /api/voice/config` 供前端探测。实测：mock provider 全链路 E2E（真实 DeepSeek：三轮对话+打断+状态恢复）+ Playwright 浏览器冒烟（假麦克风，WS 连接/播放/气泡渲染/零控制台报错）全部通过；阿里/火山两家报文需真实密钥首调校准
 
 ---
 

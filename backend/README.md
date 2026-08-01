@@ -29,17 +29,30 @@ LLM_API_KEY=sk-你的key
 ```
 也可换成 OpenAI：`LLM_BASE_URL=https://api.openai.com/v1`、`LLM_MODEL=gpt-4o`。
 
+## 配置云端语音（可选，ASR + TTS 全双工语音面试）
+不配置时，语音模式自动用浏览器原生语音识别/朗读兜底。配置后体验升级为：
+流式识别 + 拟人面试官音色 + 可随时开口打断（barge-in）。
+
+二选一（详见 `.env.example` 注释）：
+- **阿里百炼**：填 `DASHSCOPE_API_KEY`，并安装 SDK `uv pip install dashscope`
+  （Fun-ASR-Realtime 流式识别 + CosyVoice 合成）。
+- **火山引擎**：填 `VOLC_APP_ID` + `VOLC_ACCESS_TOKEN`（豆包语音，纯 WebSocket 无需 SDK）。
+
+`VOICE_PROVIDER` 留空按密钥自动选择；本地联调可设 `VOICE_PROVIDER=mock`
+（正弦波 TTS + 文字指令旁路，无需任何密钥）。
+
 ## 目录结构
 ```
 backend/
   app/
-    main.py       FastAPI 路由 + SSE
-    session.py    面试状态机（四环节 + memo + 报告）
+    main.py       FastAPI 路由 + SSE + 语音 WS
+    session.py    面试状态机（四环节 + memo + 报告，支持语音打断取消）
+    voice/        云端语音层（Provider 抽象 + 阿里/火山/mock + 全双工管道）
     prompts.py    中文面试 prompts
     personas.py   面试官人设库（按 JD 方向随机分配）
     problems.py   算法题库
     questions.py  八股题库
     parser.py     简历/JD 解析
     llm.py        LLM 客户端
-    static/       前端（index.html / app.js / style.css）
+    static/       前端（index.html / app.js / voice2.js / pcm-worklet.js / style.css）
 ```
