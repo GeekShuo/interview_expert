@@ -42,15 +42,20 @@ voiceIn.onAutoStop = (txt) => {
 let cloudAvail = false;   // 服务端是否配置了语音供应商
 function cloudActive() { return voiceMode && cloudAvail && cloudVoice.connected; }
 
-cloudVoice.detect().then((ok) => {
+// 探测云端语音可用性（/api/voice/config 需鉴权；可重复调用，用于失败重试）
+async function detectCloudVoice() {
+  const ok = await cloudVoice.detect();
   cloudAvail = ok;
   const label = $("voiceModeLabel");
-  if (!label) return;
-  const names = { aliyun: "阿里", volcengine: "火山", mock: "本地调试" };
-  label.title = ok
-    ? `云端语音（${names[cloudVoice.cfg.provider] || cloudVoice.cfg.provider}）：全双工对话，面试官说话时可随时开口打断`
-    : "未配置云端语音（浏览器原生语音兜底）：面试官自动朗读，读完自动开麦，静音自动发送";
-});
+  if (label) {
+    const names = { aliyun: "阿里", volcengine: "火山", mock: "本地调试" };
+    label.title = ok
+      ? `云端语音（${names[cloudVoice.cfg.provider] || cloudVoice.cfg.provider}）：全双工对话，面试官说话时可随时开口打断`
+      : "未配置云端语音（浏览器原生语音兜底）：面试官自动朗读，读完自动开麦，静音自动发送";
+  }
+  return ok;
+}
+// 页面加载后的首次探测在 initLogin 内进行（此处 TOKEN 尚未初始化，提前调用会 TDZ 报错）
 
 // 云端语音状态 → 麦克风/状态条 UI
 cloudVoice.onStateChange = (s) => {
@@ -120,6 +125,7 @@ async function ensureVoiceMode() {
   $("voiceModeToggle").checked = true;
   voiceMode = true;
   voiceOut.enabled = true;
+  if (!cloudAvail) await detectCloudVoice(); // 初次探测可能因 token 未就绪失败，此处重试
   if (cloudAvail && state.sessionId && !cloudVoice.connected) {
     try {
       await cloudVoice.connect(state.sessionId);
@@ -152,6 +158,7 @@ $("voiceModeToggle").addEventListener("change", async (e) => {
   voiceOut.enabled = true;
   localStorage.setItem("ie_voice_mode", voiceMode ? "1" : "0");
   if (voiceMode) {
+    if (!cloudAvail) await detectCloudVoice(); // 初次探测失败时给第二次机会
     if (cloudAvail && state.sessionId && !cloudVoice.connected) {
       try {
         await cloudVoice.connect(state.sessionId);
@@ -445,6 +452,7 @@ async function doRegister(username, password, name) {
 
 async function initLogin() {
   await ensureAnonToken(); // 保证游客也持有可用凭证
+  detectCloudVoice(); // 凭证就绪后探测云端语音（fire-and-forget）
   // 拉取预置账户，渲染「一键登录」按钮（演示账户密码统一 pass123，直接登录）
   try {
     const res = await fetch("/api/accounts");
