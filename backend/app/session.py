@@ -8,21 +8,18 @@
 """
 import uuid
 import json
-import os
 import time
 import re
 import threading
 from typing import Iterator, Optional
 
 from . import llm, prompts, personas, parser, runner, mistakes
+from . import db as _db  # 进行中会话的快照存于 SQLite live_sessions 表：重启后可恢复
 from . import history as history_store
 from .config import settings
 from .problems import pick_problem
 from .questions import pick_questions
 from .schemas import Stage, STAGE_LABELS, STAGE_ORDER
-
-# 进行中会话的落盘目录：服务重启后仍可恢复未完成的面试
-LIVE_DIR = os.path.join(history_store.DATA_DIR, "live_sessions")
 
 # 面试模式 → 阶段流程（定向练习只走对应环节 + 报告）
 MODE_FLOWS = {
@@ -514,26 +511,21 @@ class Session:
         s._report_done = False
         return s
 
-    def _live_path(self) -> str:
-        return os.path.join(LIVE_DIR, f"{self.id}.json")
-
     def _persist_live(self):
-        """原子落盘进行中会话；已结束的不落。失败不影响主流程。"""
+        """落盘进行中会话快照（INSERT OR REPLACE）；已结束的不落。失败不影响主流程。"""
         if self.stage == Stage.FINISHED:
             return
         try:
-            os.makedirs(LIVE_DIR, exist_ok=True)
-            tmp = self._live_path() + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.snapshot(), f, ensure_ascii=False)
-            os.replace(tmp, self._live_path())
-        except OSError:
+            _db.execute(
+                "INSERT OR REPLACE INTO live_sessions (session_id, user_id, snapshot, updated_at) VALUES (?,?,?,?)",
+                (self.id, self.user_id or "", json.dumps(self.snapshot(), ensure_ascii=False), time.time()))
+        except Exception:
             pass
 
     def _delete_live(self):
         try:
-            os.remove(self._live_path())
-        except OSError:
+            _db.execute("DELETE FROM live_sessions WHERE session_id = ?", (self.id,))
+        except Exception:
             pass
 
 
@@ -556,17 +548,16 @@ def get_session(session_id: str) -> Optional[Session]:
     s = _SESSIONS.get(session_id)
     if s is not None:
         return s
-    # 内存没有（如服务重启过）：尝试从磁盘快照恢复
+    # 内存没有（如服务重启过）：尝试从 SQLite 快照恢复
     if not session_id or not re.fullmatch(r"[0-9a-f]{12}", session_id):
         return None
-    path = os.path.join(LIVE_DIR, f"{session_id}.json")
-    if not os.path.exists(path):
+    row = _db.query_one("SELECT snapshot FROM live_sessions WHERE session_id = ?", (session_id,))
+    if not row:
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = json.loads(row["snapshot"])
         s = Session.from_snapshot(data)
         _SESSIONS[s.id] = s
         return s
-    except (OSError, ValueError, KeyError):
+    except (ValueError, KeyError):
         return None

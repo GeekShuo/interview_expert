@@ -1,161 +1,86 @@
-"""面试历史记录的本地持久化（JSON 文件）。
+"""面试历史记录的持久化（SQLite）。
 
-- 文件位置：backend/data/history.json（已在 .gitignore 中排除）
-- 数据结构：list[dict]，每条记录包含元信息、总分、结论、完整报告与转写
-- 仅用于本地查看历史面试，不做任何外部传输
+- 存储：data/app.db 的 interviews 表（由 db.init_db 建立，旧 history.json 自动迁移）
+- 每用户上限 MAX_RECORDS 条，超出后最旧记录自动清理
+- DATA_DIR 常量保留导出（auth / accounts 等模块既有引用兼容）
 """
 import json
-import os
 import time
 import uuid
-import threading
-import contextlib
 
-try:
-    import fcntl
-    _HAVE_FCNTL = True
-except ImportError:
-    _HAVE_FCNTL = False
+from . import db
+from .db import DATA_DIR  # noqa: F401  兼容既有 from .history import DATA_DIR
 
-if _HAVE_FCNTL:
-    _HAVE_MSVCERT = False
-else:
-    try:
-        import msvcrt
-        _HAVE_MSVCERT = True
-    except ImportError:
-        _HAVE_MSVCERT = False
-
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
-HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
-
-# 最大保留条数，避免无限增长
+# 每用户最大保留条数，避免无限增长
 MAX_RECORDS = 200
 
-# 进程内串行化（同进程多线程）；跨进程由 _file_lock 兜底（多 worker 场景）
-_WRITE_LOCK = threading.Lock()
+_SUMMARY_COLS = ("id, finished_at, created_at, persona_name, persona_title, jd_title,"
+                 " score, verdict, abandoned, dimensions, judge_passed, judge_total, weak_tags")
+
+_ORDER = "ORDER BY COALESCE(finished_at, created_at) DESC"
 
 
-@contextlib.contextmanager
-def _file_lock():
-    """跨进程文件锁：多 uvicorn worker 并发写 JSON 时，避免读到半成品文件或互相覆盖。
-
-    macOS / Linux 使用 fcntl.flock；Windows 使用 msvcrt 文件锁；均无则退化为
-    进程内串行（单 worker 下安全，与 _WRITE_LOCK 配合）。
-    """
-    os.makedirs(DATA_DIR, exist_ok=True)
-    lock_path = os.path.join(DATA_DIR, ".json_write.lock")
-    with open(lock_path, "w", encoding="utf-8") as lf:
-        if _HAVE_FCNTL:
-            fcntl.flock(lf, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lf, fcntl.LOCK_UN)
-        elif _HAVE_MSVCERT:
-            msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
-            try:
-                yield
-            finally:
-                msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            yield
-
-
-def _ensure_file():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    if not os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump([], f, ensure_ascii=False)
-
-
-def _read_all():
-    _ensure_file()
-    try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def _write_all(records):
-    _ensure_file()
-    # 仅保留最新 MAX_RECORDS 条
-    records = records[-MAX_RECORDS:]
-    # 原子写：先写临时文件再 os.replace，避免崩溃/并发导致 JSON 损坏丢全部历史
-    tmp = HISTORY_FILE + ".tmp"
-    with _WRITE_LOCK:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(records, f, ensure_ascii=False, indent=2)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
-        os.replace(tmp, HISTORY_FILE)
+def _row_to_record(row: dict) -> dict:
+    rec = dict(row)
+    rec["abandoned"] = bool(rec.get("abandoned"))
+    rec["dimensions"] = json.loads(rec.get("dimensions") or "{}")
+    rec["weak_tags"] = json.loads(rec.get("weak_tags") or "[]")
+    return rec
 
 
 def save_record(record: dict) -> str:
-    """保存一条面试记录，返回其 id。"""
-    with _file_lock():
-        records = _read_all()
-        rid = record.get("id") or ("iv_" + uuid.uuid4().hex[:12])
-        record["id"] = rid
-        record.setdefault("created_at", time.time())
-        # 更新或插入
-        for i, r in enumerate(records):
-            if r.get("id") == rid:
-                records[i] = record
-                break
-        else:
-            records.append(record)
-        _write_all(records)
+    """保存一条面试记录（同 id 覆盖更新），返回其 id。"""
+    rid = record.get("id") or ("iv_" + uuid.uuid4().hex[:12])
+    created = record.get("created_at")
+    if created is None:
+        # 覆盖写时保留原创建时间（旧版 setdefault 语义）
+        old = db.query_one("SELECT created_at FROM interviews WHERE id = ?", (rid,))
+        created = (old or {}).get("created_at") or time.time()
+    db.execute(
+        """INSERT OR REPLACE INTO interviews
+           (id, user_id, started_at, finished_at, created_at, persona_name, persona_title,
+            jd_title, score, verdict, abandoned, dimensions, judge_passed, judge_total,
+            weak_tags, report, transcript, tier)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (rid, record.get("user_id") or "", record.get("started_at"), record.get("finished_at"),
+         created, record.get("persona_name"), record.get("persona_title"),
+         record.get("jd_title"), record.get("score"), record.get("verdict"),
+         1 if record.get("abandoned") else 0,
+         json.dumps(record.get("dimensions") or {}, ensure_ascii=False),
+         record.get("judge_passed"), record.get("judge_total"),
+         json.dumps(record.get("weak_tags") or [], ensure_ascii=False),
+         record.get("report"), record.get("transcript"), record.get("tier")),
+    )
+    _enforce_limit(record.get("user_id") or "")
     return rid
 
 
-def list_records(user_id: str | None = None) -> list:
-    """返回记录列表（按时间倒序，最新在前）。
+def _enforce_limit(user_id: str):
+    """每用户仅保留最新 MAX_RECORDS 条（按完成时间倒序）。"""
+    db.execute(
+        f"""DELETE FROM interviews WHERE user_id = ? AND id NOT IN (
+               SELECT id FROM interviews WHERE user_id = ? {_ORDER} LIMIT ?)""",
+        (user_id, user_id, MAX_RECORDS),
+    )
 
-    user_id 为空时返回全部（兼容旧数据 / 单用户）；传入时仅返回该用户记录，
+
+def list_records(user_id: str | None = None) -> list:
+    """返回记录摘要列表（按时间倒序，最新在前）。
+
+    user_id 为空时返回全部（管理/调试用）；传入时仅返回该用户记录，
     实现多用户「成长曲线」互不串数据。
     """
-    records = _read_all()
     if user_id:
-        records = [r for r in records if r.get("user_id") == user_id]
-    records.sort(key=lambda r: r.get("finished_at") or r.get("created_at") or 0, reverse=True)
-    # 列表页只返回摘要字段，避免传输大段报告
-    summary = []
-    for r in records:
-        summary.append({
-            "id": r.get("id"),
-            "finished_at": r.get("finished_at"),
-            "created_at": r.get("created_at"),
-            "persona_name": r.get("persona_name"),
-            "persona_title": r.get("persona_title"),
-            "jd_title": r.get("jd_title"),
-            "score": r.get("score"),
-            "verdict": r.get("verdict"),
-            "abandoned": r.get("abandoned", False),
-            "dimensions": r.get("dimensions") or {},
-            "judge_passed": r.get("judge_passed"),
-            "judge_total": r.get("judge_total"),
-            "weak_tags": r.get("weak_tags") or [],
-        })
-    return summary
+        rows = db.query_all(f"SELECT {_SUMMARY_COLS} FROM interviews WHERE user_id = ? {_ORDER}", (user_id,))
+    else:
+        rows = db.query_all(f"SELECT {_SUMMARY_COLS} FROM interviews {_ORDER}")
+    return [_row_to_record(r) for r in rows]
 
 
 def get_record(rid: str) -> dict | None:
-    for r in _read_all():
-        if r.get("id") == rid:
-            return r
-    return None
+    row = db.query_one("SELECT * FROM interviews WHERE id = ?", (rid,))
+    return _row_to_record(row) if row else None
 
 
 def delete_record(rid: str) -> bool:
-    with _file_lock():
-        records = _read_all()
-        new = [r for r in records if r.get("id") != rid]
-        if len(new) == len(records):
-            return False
-        _write_all(new)
-    return True
+    return db.execute("DELETE FROM interviews WHERE id = ?", (rid,)).rowcount > 0

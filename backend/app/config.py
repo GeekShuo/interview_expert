@@ -20,6 +20,16 @@ class Settings:
     # 是否播种/展示演示账户（alice/bob/... 密码 pass123）：仅本地演示用，上线必须设为 false
     SEED_DEMO_ACCOUNTS: bool = os.getenv("SEED_DEMO_ACCOUNTS", "true").strip().lower() in ("1", "true", "yes")
 
+    # ===== 代码沙箱配置 =====
+    # 判题执行模式：
+    #   docker = 强制 Docker 容器隔离（生产必须）；daemon/镜像未就绪时判题明确不可用，绝不退回本地执行
+    #   local  = 本地子进程（仅开发调试用，无网络/文件系统硬隔离）
+    #   auto   = 自动检测：有 Docker 用 Docker，否则本地子进程并打印警告（默认，开发友好）
+    SANDBOX_MODE: str = os.getenv("SANDBOX_MODE", "auto")
+    JUDGE_IMAGE: str = os.getenv("JUDGE_IMAGE", "interview-judge:latest")
+    JUDGE_MEM: str = os.getenv("JUDGE_MEM", "128m")    # 容器内存上限（swap 同值，禁用交换）
+    JUDGE_CPUS: str = os.getenv("JUDGE_CPUS", "0.5")   # 容器 CPU 配额
+
     # ===== 语音（ASR + TTS）配置 =====
     # aliyun=阿里百炼(dashscope) / volcengine=火山引擎(豆包) / mock=本地调试(无声卡正弦波)
     # 留空=自动选择（优先阿里，其次火山，都没配则语音不可用、前端回退浏览器原生语音）

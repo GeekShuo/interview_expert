@@ -1,0 +1,16 @@
+# 判题专用镜像：最小化 Python 运行时，无任何第三方包
+#
+# 构建（在 backend/ 目录下）：
+#   docker build -t interview-judge -f docker/Dockerfile.judge docker/
+#
+# 隔离主体在 docker run 参数（runner.py）：--network=none / --read-only /
+# --memory / --cpus / --pids-limit / --cap-drop=ALL / --security-opt=no-new-privileges
+FROM python:3.11-slim
+
+# 非 root 运行，缩小容器内提权与逃逸后的影响面
+RUN useradd --create-home judge
+USER judge
+WORKDIR /work
+
+# 实际执行命令由 docker run 指定（timeout N python -I /work/solution.py），此处仅兜底
+CMD ["python", "--version"]

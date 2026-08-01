@@ -291,7 +291,14 @@
       <input id="loginPass" type="password" placeholder="密码" autocomplete="current-password" class="w-full mb-3 rounded-lg bg-ink-700 border border-white/10 px-3 py-2.5 text-sm focus:outline-none focus:border-brand-500" />
       <button id="loginBtn" class="w-full h-11 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-500 hover:from-brand-600 hover:to-indigo-600 font-semibold text-white transition">登录</button>
       <div id="loginErr" class="text-rose-400 text-xs mt-2 hidden"></div>
-      <p class="text-center text-slate-500 text-[11px] mt-2">预置演示账户：alice / bob / carol / dave，密码均为 pass123</p>
+      <button id="regToggle" class="w-full mt-2 text-xs text-brand-300 hover:text-brand-200">没有账户？点此注册</button>
+      <div id="regArea" class="hidden mt-2 rounded-xl border border-white/10 bg-ink-700/30 p-3">
+        <input id="regName" placeholder="昵称（可选）" autocomplete="nickname" class="w-full mb-2 rounded-lg bg-ink-700 border border-white/10 px-3 py-2.5 text-sm focus:outline-none focus:border-brand-500" />
+        <input id="regUser" placeholder="用户名（3~20 位小写字母/数字/下划线）" autocomplete="username" class="w-full mb-2 rounded-lg bg-ink-700 border border-white/10 px-3 py-2.5 text-sm focus:outline-none focus:border-brand-500" />
+        <input id="regPass" type="password" placeholder="密码（至少 6 位）" autocomplete="new-password" class="w-full mb-2 rounded-lg bg-ink-700 border border-white/10 px-3 py-2.5 text-sm focus:outline-none focus:border-brand-500" />
+        <button id="regBtn" class="w-full h-10 rounded-xl border border-brand-500/60 text-brand-200 hover:bg-brand-500/15 font-medium transition">注册并登录</button>
+      </div>
+      <p id="demoHint" class="text-center text-slate-500 text-[11px] mt-2">预置演示账户：alice / bob / carol / dave，密码均为 pass123</p>
       <button id="guestBtn" class="w-full mt-3 text-xs text-slate-400 hover:text-slate-200">游客模式（不登录也能练习，但历史仅保存在本机本浏览器）</button>
     </div>
   </div>

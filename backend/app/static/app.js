@@ -222,7 +222,7 @@ $("resumeFile").addEventListener("change", async (e) => {
   const fd = new FormData();
   fd.append("file", file);
   try {
-    const res = await fetch("/api/upload_resume", { method: "POST", body: fd });
+    const res = await apiFetch("/api/upload_resume", { method: "POST", body: fd });
     const data = await res.json();
     const text = data.text || "";
     if (!text || text.startsWith("[") ) {
@@ -311,6 +311,44 @@ const UID = (() => {
 // 登录账户：登录后以账户名作为稳定 user_id（历史/错题跨设备一致）；未登录回退匿名 UID
 let ACCOUNT = (() => { try { return JSON.parse(localStorage.getItem("ie_user")); } catch { return null; } })();
 function userId() { return (ACCOUNT && ACCOUNT.username) || UID; }
+
+// ============ 认证 token（JWT）：受保护 API 一律经 apiFetch 自动携带 ============
+let TOKEN = localStorage.getItem("ie_token") || "";
+function setToken(t) {
+  TOKEN = t || "";
+  if (t) localStorage.setItem("ie_token", t); else localStorage.removeItem("ie_token");
+}
+
+// 游客身份换取匿名 token：保证未登录访客也有可用凭证（数据隔离沿用旧行为）
+async function ensureAnonToken() {
+  if (TOKEN) return;
+  try {
+    const res = await fetch("/api/anon_token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ uid: UID }),
+    });
+    const d = await res.json();
+    if (d.token) setToken(d.token);
+  } catch (e) { /* 网络异常：后续请求 401 时会引导重新登录 */ }
+}
+
+// 统一请求封装：自动带 Bearer token；401 时清登录态并弹登录层
+async function apiFetch(url, options = {}) {
+  options.headers = Object.assign({}, options.headers);
+  if (TOKEN) options.headers["Authorization"] = "Bearer " + TOKEN;
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    ACCOUNT = null;
+    localStorage.removeItem("ie_user");
+    setToken("");
+    renderUser();
+    document.getElementById("loginModal").classList.remove("hidden");
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail || "登录已过期，请重新登录");
+  }
+  return res;
+}
 let currentTier = localStorage.getItem("ie_tier") || "normal";
 
 function renderTierToggle() {
@@ -349,6 +387,8 @@ function renderUser() {
 function logout() {
   ACCOUNT = null;
   localStorage.removeItem("ie_user");
+  setToken("");
+  ensureAnonToken(); // 退出后回退为游客匿名凭证
   document.getElementById("loginModal").classList.remove("hidden");
   renderUser();
 }
@@ -365,6 +405,7 @@ async function doLogin(username, password) {
       throw new Error(d.detail || "登录失败");
     }
     const d = await res.json();
+    setToken(d.token);
     ACCOUNT = { username: d.user_id, name: d.name };
     localStorage.setItem("ie_user", JSON.stringify(ACCOUNT));
     document.getElementById("loginModal").classList.add("hidden");
@@ -377,13 +418,45 @@ async function doLogin(username, password) {
   }
 }
 
+async function doRegister(username, password, name) {
+  try {
+    const res = await fetch("/api/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ username, password, name }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || "注册失败");
+    }
+    const d = await res.json();
+    setToken(d.token);
+    ACCOUNT = { username: d.user_id, name: d.name };
+    localStorage.setItem("ie_user", JSON.stringify(ACCOUNT));
+    document.getElementById("loginModal").classList.add("hidden");
+    renderUser();
+    showHint("注册成功，已登录：" + d.name);
+  } catch (e) {
+    const err = document.getElementById("loginErr");
+    err.textContent = e.message;
+    err.classList.remove("hidden");
+  }
+}
+
 async function initLogin() {
+  await ensureAnonToken(); // 保证游客也持有可用凭证
   // 拉取预置账户，渲染「一键登录」按钮（演示账户密码统一 pass123，直接登录）
   try {
     const res = await fetch("/api/accounts");
     const data = await res.json();
     const box = document.getElementById("accountQuick");
     const accounts = data.accounts || [];
+    // 后端关闭演示账户时（生产），隐藏一键登录与演示提示
+    if (!accounts.length) {
+      box.classList.add("hidden");
+      const hint = document.getElementById("demoHint");
+      if (hint) hint.classList.add("hidden");
+    }
     if (accounts.length) {
       box.innerHTML = accounts.map((a) =>
         `<button type="button" data-user="${escapeHtml(a.username)}" class="quick-login text-sm px-3 py-2.5 rounded-lg border border-white/10 hover:border-brand-500 bg-ink-700/50 flex items-center justify-between">
@@ -406,9 +479,24 @@ async function initLogin() {
   document.getElementById("loginPass").addEventListener("keydown", (e) => {
     if (e.key === "Enter") document.getElementById("loginBtn").click();
   });
+  document.getElementById("regToggle").addEventListener("click", () => {
+    document.getElementById("regArea").classList.toggle("hidden");
+  });
+  document.getElementById("regBtn").addEventListener("click", () => {
+    document.getElementById("loginErr").classList.add("hidden");
+    doRegister(
+      document.getElementById("regUser").value.trim(),
+      document.getElementById("regPass").value,
+      document.getElementById("regName").value.trim()
+    );
+  });
+  document.getElementById("regPass").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") document.getElementById("regBtn").click();
+  });
   document.getElementById("guestBtn").addEventListener("click", () => {
     ACCOUNT = null;
     localStorage.removeItem("ie_user");
+    ensureAnonToken();
     document.getElementById("loginModal").classList.add("hidden");
     renderUser();
   });
@@ -450,7 +538,6 @@ async function startInterview(overrides = {}) {
   if (probe) fd.append("resume_probe_points", probe);
   fd.append("style", state.style || "strict");
   fd.append("tier", currentTier);
-  fd.append("user_id", userId());
   if (difficulty) fd.append("difficulty", difficulty);
   if (problemId) fd.append("problem_id", problemId);
   if (direction) fd.append("direction", direction);
@@ -459,7 +546,7 @@ async function startInterview(overrides = {}) {
   if (prev) fd.append("previous_session_id", prev);
 
   try {
-    const res = await fetch("/api/start", { method: "POST", body: fd });
+    const res = await apiFetch("/api/start", { method: "POST", body: fd });
     const data = await res.json();
     state.sessionId = data.session_id;
     state.stages = data.stages;
@@ -516,7 +603,7 @@ async function checkResumable() {
   const sid = localStorage.getItem("iv_session_id");
   if (!sid) return;
   try {
-    const res = await fetch("/api/state?session_id=" + encodeURIComponent(sid));
+    const res = await apiFetch("/api/state?session_id=" + encodeURIComponent(sid));
     if (!res.ok) { localStorage.removeItem("iv_session_id"); return; }
     const st = await res.json();
     if (st.stage === "finished" || st.stage === "report" || st.abandoned) {
@@ -644,10 +731,10 @@ function addMessage(role, animate = true) {
       const dir = (state.persona && state.persona.direction) || "";
       btn.disabled = true;
       btn.textContent = "提交中…";
-      fetch("/api/mistakes/quiz", {
+      apiFetch("/api/mistakes/quiz", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ direction: dir, question: q, user_id: userId() }),
+        body: new URLSearchParams({ direction: dir, question: q }),
       }).then(() => { btn.textContent = "✅ 已加入错题本"; })
         .catch(() => { btn.disabled = false; btn.textContent = "📕 没答好？加入错题本"; showHint("加入失败，请重试"); });
     });
@@ -684,7 +771,7 @@ function scrollBottom() {
 async function streamSSE(url, options, { onToken, onReport, onStage, onProblem, onJudge }, signal) {
   let res;
   try {
-    res = await fetch(url, { ...options, signal });
+    res = await apiFetch(url, { ...options, signal });
   } catch (e) {
     if (e && e.name === "AbortError") return; // 用户主动停止，正常结束
     throw e;
@@ -1160,7 +1247,7 @@ async function loadHistory() {
   const list = $("historyList");
   list.innerHTML = '<div class="text-slate-500 text-sm">加载中…</div>';
   try {
-    const res = await fetch("/api/history?user_id=" + encodeURIComponent(userId()));
+    const res = await apiFetch("/api/history");
     const data = await res.json();
     const records = data.records || [];
     renderHistoryStats(records);
@@ -1307,7 +1394,7 @@ function renderHistoryStats(records) {
 
 async function viewHistoryDetail(id) {
   try {
-    const res = await fetch("/api/history/" + id);
+    const res = await apiFetch("/api/history/" + id);
     const rec = await res.json();
     renderReportScore(rec.report || "");
     const transcriptHtml = rec.transcript
@@ -1326,7 +1413,7 @@ async function viewHistoryDetail(id) {
 async function deleteHistory(id) {
   if (!confirm("确定删除这条历史记录？")) return;
   try {
-    await fetch("/api/history/" + id, { method: "DELETE" });
+    await apiFetch("/api/history/" + id, { method: "DELETE" });
     loadHistory();
   } catch (e) {
     alert("删除失败：" + e.message);
@@ -1348,7 +1435,7 @@ async function renderMistakes() {
       <div id="mistakeBody"><div class="text-xs text-slate-500">加载中…</div></div>
     </div>`;
   try {
-    const res = await fetch("/api/mistakes?user_id=" + encodeURIComponent(userId()));
+    const res = await apiFetch("/api/mistakes");
     const data = await res.json();
     const ms = data.mistakes || [];
     const body = box.querySelector("#mistakeBody");
@@ -1403,7 +1490,7 @@ async function startPractice(problemId) {
   // 重练前校验该题仍在错题本，避免「已消灭/不存在」却静默开随机题
   let useId = problemId;
   try {
-    const res = await fetch("/api/mistakes?user_id=" + encodeURIComponent(userId()));
+    const res = await apiFetch("/api/mistakes");
     const data = await res.json();
     const exists = (data.mistakes || []).some((m) => m.problem_id === problemId);
     if (!exists) {
@@ -1422,7 +1509,7 @@ async function startPracticeQuiz(direction) {
 
 async function deleteMistake(problemId) {
   try {
-    const res = await fetch("/api/mistakes/" + encodeURIComponent(problemId), { method: "DELETE" });
+    const res = await apiFetch("/api/mistakes/" + encodeURIComponent(problemId), { method: "DELETE" });
     if (!res.ok) throw new Error("bad");
     renderMistakes();
   } catch (e) {
