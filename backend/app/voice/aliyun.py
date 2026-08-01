@@ -133,14 +133,20 @@ class AliyunTTS:
                 voice=settings.ALIYUN_TTS_VOICE,
                 callback=_CB(),
             )
-            # PCM 输出（前端按裸 PCM 流式播放）；不同版本 SDK 枚举名略有差异，做防御
+            # PCM 输出（前端按裸 PCM 流式播放）；新版 SDK 枚举为 AudioFormat，
+            # 旧版为 SpeechSynthesisAudioFormat，做双版本兼容
+            fmt = None
             try:
-                from dashscope.audio.tts_v2 import SpeechSynthesisAudioFormat
-                fmt = getattr(SpeechSynthesisAudioFormat, "PCM_22050HZ_MONO_16BIT", None)
-                if fmt is not None:
-                    kwargs["format"] = fmt
-            except Exception:
-                pass
+                from dashscope.audio.tts_v2 import AudioFormat
+                fmt = getattr(AudioFormat, "PCM_22050HZ_MONO_16BIT", None)
+            except ImportError:
+                try:
+                    from dashscope.audio.tts_v2 import SpeechSynthesisAudioFormat
+                    fmt = getattr(SpeechSynthesisAudioFormat, "PCM_22050HZ_MONO_16BIT", None)
+                except ImportError:
+                    pass
+            if fmt is not None:
+                kwargs["format"] = fmt
             synth = SpeechSynthesizer(**kwargs)
             synth.call(text)
 
