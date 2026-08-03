@@ -24,6 +24,22 @@ const voiceOut = new VoiceOutput();
 const voiceIn = new VoiceInput();
 let voiceMode = false; // 语音模式：自动朗读 + 读完开麦 + 静音自动发送
 
+// 安全上下文检测：HTTP 公网环境下浏览器禁止麦克风（getUserMedia / SpeechRecognition 均受限），
+// 语音面试需 HTTPS 或 localhost 才可用；文本面试不受影响。（isSecureContext 为 undefined 的老浏览器按可用处理）
+const micSupported = window.isSecureContext !== false &&
+  !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+const MIC_BLOCK_TIP = "当前为 HTTP 访问，浏览器安全策略禁止使用麦克风，语音面试将在 HTTPS 部署后开放，请先使用文字面试";
+// 非安全上下文：语音开关置灰并给出说明（TTS 朗读在此模式下也一并停用，避免"读了但无法回答"的半截体验）
+if (!micSupported) {
+  const label = $("voiceModeLabel");
+  if (label) {
+    label.title = MIC_BLOCK_TIP;
+    label.classList.add("opacity-50", "cursor-not-allowed");
+  }
+  const mic = $("micBtn");
+  if (mic) mic.title = MIC_BLOCK_TIP;
+}
+
 // 麦克风识别实时更新输入框
 voiceIn.onUpdate = (finalText, interim) => {
   $("userInput").value = finalText + interim;
@@ -121,6 +137,7 @@ cloudVoice.onEvent = (ev) => {
 
 // 恢复语音模式偏好（开始/恢复面试时调用）：开启并按需连接云端语音
 async function ensureVoiceMode() {
+  if (!micSupported) return; // HTTP 环境跳过（偏好保留，HTTPS 部署后自动恢复）
   if (localStorage.getItem("ie_voice_mode") !== "1") return;
   $("voiceModeToggle").checked = true;
   voiceMode = true;
@@ -154,6 +171,11 @@ function setMicUI(active) {
 
 // 语音模式开关
 $("voiceModeToggle").addEventListener("change", async (e) => {
+  if (e.target.checked && !micSupported) {
+    e.target.checked = false; // 不改写本地偏好，HTTPS 部署后仍可自动恢复
+    showToast(MIC_BLOCK_TIP);
+    return;
+  }
   voiceMode = e.target.checked;
   voiceOut.enabled = true;
   localStorage.setItem("ie_voice_mode", voiceMode ? "1" : "0");
@@ -179,6 +201,7 @@ $("voiceModeToggle").addEventListener("change", async (e) => {
 
 // 麦克风按钮：云端模式=静音/恢复；浏览器模式=手动开/关（关闭时若已识别到内容则发送）
 $("micBtn").addEventListener("click", () => {
+  if (!micSupported) { showToast(MIC_BLOCK_TIP); return; }
   if (cloudActive()) {
     const muted = cloudVoice.toggleMute();
     const st = $("voiceStatus");
@@ -1123,10 +1146,28 @@ $("submitCodeBtn").addEventListener("click", async () => {
 
 // ============ 报告 ============
 let reportAcc = "";
+// 报告生成中的占位提示：从打开弹窗到首个 token 到达之间有数秒空窗，空白会让用户以为卡住
+const REPORT_LOADING_HTML =
+  '<div class="flex items-center gap-2.5 text-slate-400 py-8 justify-center">'
+  + '<span class="animate-pulse text-lg">✍️</span>'
+  + '<span>面试报告生成中，通常需要十几秒，请稍候…</span></div>';
+
+// 报告为空时禁用导出按钮，避免点了只弹一句"暂无可导出"让人困惑
+function setReportExportEnabled(on) {
+  for (const id of ["exportMdBtn", "exportPdfBtn"]) {
+    const btn = $(id);
+    btn.disabled = !on;
+    btn.classList.toggle("opacity-40", !on);
+    btn.classList.toggle("cursor-not-allowed", !on);
+  }
+}
+
 function handleReportToken(text, start) {
   if (start) {
     reportAcc = "";
+    $("reportContent").innerHTML = REPORT_LOADING_HTML;
     renderReportScore(""); // 先隐藏分数条
+    setReportExportEnabled(false);
     openReport();
     return;
   }
@@ -1134,6 +1175,7 @@ function handleReportToken(text, start) {
   $("reportContent").innerHTML = safeMd(reportAcc);
   state.report = reportAcc;
   renderReportScore(reportAcc);
+  setReportExportEnabled(true);
   const rc = $("reportContent");
   rc.scrollTop = rc.scrollHeight;
 }
@@ -1203,6 +1245,11 @@ function renderReportScore(text) {
 }
 
 function openReport() {
+  // 进入 report 阶段会先打开弹窗、report_start 事件稍后到达，期间补占位提示，避免空白
+  if (!$("reportContent").innerHTML.trim()) {
+    $("reportContent").innerHTML = REPORT_LOADING_HTML;
+    setReportExportEnabled(false);
+  }
   const modal = $("reportModal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
@@ -1410,6 +1457,7 @@ async function viewHistoryDetail(id) {
       : "";
     $("reportContent").innerHTML = safeMd(rec.report || "（无报告）") + transcriptHtml;
     state.report = rec.report || "";
+    setReportExportEnabled(!!state.report.trim());
     $("reportContent").scrollTop = 0;
     closeHistory();
     openReport();

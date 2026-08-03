@@ -54,8 +54,18 @@ class Session:
         self.style = style if style in prompts.STYLE_INSTR else "strict"
         self.tier = "pro" if tier == "pro" else "normal"   # 普通 / Pro
         self.user_id = user_id or None                      # 多用户隔离：历史与错题按此分区
-        self.jd = parser.parse_jd(jd_text)
-        self.resume = parser.parse_resume(resume_text)
+        # 定向练习（quiz/coding）不依赖简历/JD 结构化，跳过两次 LLM 解析以加速启动；
+        # project 与完整面试仍需解析（项目深挖要用简历摘要与追问点）
+        if mode in ("quiz", "coding"):
+            self.jd = {
+                "title": (jd_text or "").strip()[:60] or "算法工程师（定向练习）",
+                "requirements": "",
+                "full_text": jd_text or "",
+            }
+            self.resume = {"summary": "", "full_text": resume_text or "", "probe_points": ""}
+        else:
+            self.jd = parser.parse_jd(jd_text)
+            self.resume = parser.parse_resume(resume_text)
         self.direction = direction or None  # 用户显式指定的方向，覆盖自动推断
         self.persona = personas.assign_persona(jd_text + " " + self.jd.get("full_text", ""), direction)
         self.stage: Stage = self.stage_flow[0]
@@ -343,7 +353,8 @@ class Session:
         )
         if self.mode != "full":
             transcript = (f"（注意：本场为定向练习模式「{MODE_LABELS.get(self.mode, '')}」，"
-                          f"只进行了对应环节，未考察的维度请标注「本场未考察」，不要臆测打分）\n"
+                          f"只进行了对应环节。未考察的维度既不打分也不算短板，"
+                          f"更不要在「明显短板与疑点」里提及；结论只基于已考察内容。）\n"
                           + transcript)
         memo_text = "\n".join(self.memo) or "（无）"
         judge_text = "\n".join(
@@ -354,6 +365,7 @@ class Session:
         prompt = prompts.report_prompt(
             self.persona, self.resume, self.jd, transcript, memo_text, judge_text,
             style=self.style, direction=self.persona.get("direction"),
+            mode=self.mode,
         )
         yield {"type": "report_start"}
         report_text = ""

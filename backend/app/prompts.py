@@ -174,19 +174,53 @@ def dimensions_for(direction: str) -> list:
     return ROLE_DIMENSIONS.get(direction, DEFAULT_DIMENSIONS)
 
 
+# 定向练习模式只走部分环节，对应维度才算"本场考察"；其余维度不应打分、不应当短板
+_MODE_STAGES = {
+    "full": {"greeting", "project", "coding", "quiz"},
+    "no_code": {"greeting", "project", "quiz"},
+    "coding": {"coding"},
+    "quiz": {"quiz"},
+    "project": {"project"},
+}
+# 维度 → 依赖的环节；不在该映射里的维度视为"全程考察"（如专业能力、表达与逻辑）
+_DIM_STAGE = {
+    "项目深度与真实性": "project",
+    "案例真实性": "project",
+    "算法与编码": "coding",
+    "专业基础（八股）": "quiz",
+}
+_MODE_SCOPE_TEXT = {
+    "full": "完整面试（自我介绍 → 项目深挖 → 算法手撕 → 专业八股 → 报告），所有维度均已考察",
+    "no_code": "非技术岗完整面试（自我介绍 → 项目深挖 → 专业问答 → 报告），未设代码环节",
+    "coding": "定向练习：只练手撕代码（仅算法与编码维度）",
+    "quiz": "定向练习：只练专业八股（仅专业基础与表达维度）",
+    "project": "定向练习：只练项目深挖（仅项目深度维度）",
+}
+
+
+def assessed_dims_for(mode: str, direction: str) -> list:
+    base = dimensions_for(direction)
+    stages = _MODE_STAGES.get(mode, _MODE_STAGES["full"])
+    return [d for d in base if _DIM_STAGE.get(d, None) in stages or _DIM_STAGE.get(d) is None]
+
+
 def report_prompt(persona: dict, resume: dict, jd: dict, transcript: str, memo: str,
-                  judge: str = "（无）", style: str = "strict", direction: str = None) -> str:
-    dims = dimensions_for(direction)
+                  judge: str = "（无）", style: str = "strict", direction: str = None,
+                  mode: str = "full") -> str:
+    dims = assessed_dims_for(mode, direction)
     coding_assessed = "算法与编码" in dims
     dims_block = "\n".join(f"- **{d}**：x/5 —— 理由" for d in dims)
     if coding_assessed:
         judge_note = "【代码自动判题结果（沙箱真实运行，客观事实，评「算法与编码」分项时必须以此为准）】"
-        practice_line = ("- **推荐练习题目**（列 5-8 道 LeetCode 题号+题名；若自动判题有未通过的题，必须优先围绕\n"
-                         "  该题「考察标签」选同类题针对性补强，并注明\"因为你在 XX 题上 x/y 未通过\"）")
+        practice_line = ("- **推荐练习题目**（列 5-8 道 LeetCode 题号+题名；若自动判题有未通过的题，优先围绕\n"
+                         "  该题「考察标签」选**同类题型**针对性补强，并注明\"因为你在 XX 题上 x/y 未通过\"。\n"
+                         "  注意：是练同类题、不是把原题再刷一遍）")
     else:
         judge_note = "【代码自动判题结果】（本场未考察编码，此项为空，请忽略，不要臆测）"
-        practice_line = ("- **推荐练习方向**（结合本场暴露的短板，列出 3-6 个可落地的练习/学习方向，"
-                         "如情景演练、行业知识、数据方法等，并说明对应哪条薄弱证据）")
+        practice_line = ("- **推荐练习方向**（仅针对本场**实际暴露**的薄弱项，列出 3-6 个可落地的练习/学习方向，"
+                         "如情景演练、行业知识、数据方法等，并说明对应哪条薄弱证据。推荐练习**同类知识方向**，"
+                         "不要让候选人把本场原题再学一遍）")
+    scope_text = _MODE_SCOPE_TEXT.get(mode, _MODE_SCOPE_TEXT["full"])
     return f"""你是资深面试官 {persona['name']}（{persona['title']}），刚刚结束了一场对候选人的完整面试。
 现在请基于【完整面试记录】、你的【面试笔记】和【代码自动判题结果】，输出一份专业、犀利、有证据的面试评估报告。
 
@@ -195,6 +229,8 @@ def report_prompt(persona: dict, resume: dict, jd: dict, transcript: str, memo: 
 （先给出总分与结论：总分由各分项加权得到；推荐结论必须从「通过」「待定」「不通过」中选一个，不要写多个或带斜杠）
 
 【目标岗位】{jd.get('title', '算法岗')}
+【本场面试范围】{scope_text}
+  ⚠️ 只评价本场**实际考察过**的维度；未考察的维度不打分、不计入总分、更**不得**作为短板或疑点列出——"没考到"是面试设计使然，不是候选人的问题。
 【面试笔记（你在面试中的隐藏记录）】
 {memo}
 
@@ -210,26 +246,29 @@ def report_prompt(persona: dict, resume: dict, jd: dict, transcript: str, memo: 
 - 严格按以下结构输出：
 
 ## 一、综合评价
-（3-4 句总体判断 + 是否推荐通过的倾向）
+（3-4 句总体判断 + 是否推荐通过的倾向；结论只基于本场已考察内容，不要因"还有维度没考"而压低结论）
 
 ## 二、分项评分（每项 1-5 分并说明理由，附证据）
 {dims_block}
+（只列出本场实际考察的分项；不要补"本场未考察"的分项行）
 
 ## 三、亮点
 （列举 2-3 条，引用具体表现）
 
 ## 四、明显短板与疑点
-（列举 2-4 条，包括经历真实性存疑处、答不上来的问题、逻辑不清处，引用证据）
+（仅限候选人本场**实际表现**不佳处：答错/答不全、逻辑不清、经历真实性存疑等，必须引用证据。
+**严禁**把"本场未考察的维度/环节"写成短板或疑点。若本场表现确实没有明显短板，可直接写"本场未见明显短板"并简述一句理由，不要为了凑数硬编。）
 
 ## 五、针对性改进建议
-（3-5 条可落地的具体建议）
+（3-5 条可落地建议；只针对本场实际暴露的薄弱点，表现优异的维度不必给建议）
 
-## 六、可执行提升计划（本报告最有价值的部分，务必具体）
-基于本场暴露的薄弱点，给出一份候选人拿来就能执行的提升计划：
-- **优先补齐的知识点**（列 3-5 个，每个附 1 句"薄弱证据"，来自本场表现）
+## 六、可执行提升计划
+**本节仅在确实存在薄弱项时给出**。若候选人本场整体表现优秀、无实质短板，本节写一句"本场表现优秀，无需额外补强计划"即可，不要硬凑 7 天安排。
+给出计划时遵循：
+- **优先补齐的方向**（列 3-5 个，每个附 1 句"薄弱证据"，来自本场表现）
 {practice_line}
-- **7 天冲刺安排**（按天列出：Day1-7 每天练什么、看什么，量化到题数/知识点数）
-- **下次面试前自检清单**（3-5 条 checkbox，如"能不看资料手写 XX"）
+- **7 天冲刺安排**（仅在有明确薄弱项时按天列出；表现优秀则省略此子项）
+- **下次面试前自检清单**（3-5 条 checkbox）
 
 ## 七、一句话总评
 
