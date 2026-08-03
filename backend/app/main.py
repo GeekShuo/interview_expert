@@ -24,6 +24,18 @@ from .config import settings
 from .schemas import ChatRequest, CodeSubmitRequest, STAGE_LABELS
 from .schemas import Stage
 
+import logging as _logging
+
+# 语音模块日志：uvicorn 默认不给第三方 logger 挂 handler，这里单独配置
+# （输出到 stderr，随服务日志一起采集；一轮一行，量级可控）
+_vlog = _logging.getLogger("interview_expert")
+if not _vlog.handlers:
+    _h = _logging.StreamHandler()
+    _h.setFormatter(_logging.Formatter("VOICE %(levelname)s: %(message)s"))
+    _vlog.addHandler(_h)
+    _vlog.setLevel(_logging.INFO)
+    _vlog.propagate = False
+
 app = FastAPI(title="AI 模拟面试系统")
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -396,7 +408,10 @@ async def voice_ws(ws: WebSocket, session_id: str, token: str = ""):
 # ---------- 静态前端 ----------
 @app.get("/")
 def index():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    return FileResponse(
+        str(STATIC_DIR / "index.html"),
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/favicon.ico")
@@ -405,4 +420,14 @@ def favicon():
     return Response(status_code=204)
 
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+class _NoCacheStaticFiles(StaticFiles):
+    """静态资源带 ETag 但要求每次校验，避免 Safari/Chrome 长期缓存旧 css/js。"""
+
+    async def get_response(self, path: str, scope):
+        resp = await super().get_response(path, scope)
+        if resp.status_code == 200:
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/static", _NoCacheStaticFiles(directory=str(STATIC_DIR)), name="static")

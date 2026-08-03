@@ -63,11 +63,23 @@ async function detectCloudVoice() {
   const ok = await cloudVoice.detect();
   cloudAvail = ok;
   const label = $("voiceModeLabel");
+  const tag = $("voiceEngineTag");
+  const names = { aliyun: "阿里", volcengine: "火山", mock: "本地调试" };
   if (label) {
-    const names = { aliyun: "阿里", volcengine: "火山", mock: "本地调试" };
     label.title = ok
       ? `云端语音（${names[cloudVoice.cfg.provider] || cloudVoice.cfg.provider}）：全双工对话，面试官说话时可随时开口打断`
-      : "未配置云端语音（浏览器原生语音兜底）：面试官自动朗读，读完自动开麦，静音自动发送";
+      : "未连接云端语音（浏览器原生语音兜底，音色生硬、识别不准）：请刷新页面重试，或检查后端 DASHSCOPE_API_KEY";
+  }
+  if (tag) {
+    // 显式标注当前语音引擎，避免"以为在用云端实际在用浏览器兜底"难以察觉
+    tag.classList.remove("hidden");
+    if (ok) {
+      tag.textContent = "云端·" + (names[cloudVoice.cfg.provider] || cloudVoice.cfg.provider);
+      tag.className = "ml-1 px-1 rounded text-[10px] bg-emerald-500/20 text-emerald-300";
+    } else {
+      tag.textContent = "本地兜底";
+      tag.className = "ml-1 px-1 rounded text-[10px] bg-amber-500/20 text-amber-300";
+    }
   }
   return ok;
 }
@@ -78,10 +90,14 @@ cloudVoice.onStateChange = (s) => {
   const st = $("voiceStatus");
   if (s === "listening") {
     setMicUI(true);
-    st.textContent = "🎧 聆听中，直接说话…";
+    st.textContent = "🎧 聆听中，直接说话…（点麦克风可暂停面试）";
     st.classList.remove("hidden");
   } else if (s === "speaking") {
-    st.textContent = "🔊 面试官说话中（可随时开口打断）";
+    st.textContent = "🔊 面试官说话中（可随时开口打断，点麦克风暂停）";
+    st.classList.remove("hidden");
+  } else if (s === "paused") {
+    setMicUI(false);
+    st.textContent = "⏸ 面试已暂停，点击麦克风继续";
     st.classList.remove("hidden");
   } else {
     setMicUI(false);
@@ -104,11 +120,17 @@ cloudVoice.onEvent = (ev) => {
       renderUserMessage(ev.text);
       break;
     case "turn_start":
+      $("userInput").value = ""; // 清掉面试官说话期间回声/噪音产生的误识别残留
+      autoGrow();
       cloudInner = addMessage("assistant");
       cloudInner.parentElement.classList.add("cursor-blink");
       cloudAcc = "";
       state.streaming = true;
       $("stopBtn").classList.remove("hidden");
+      break;
+    case "notice":  // 服务端正向提示（如「语音识别已恢复」）
+      $("voiceStatus").textContent = ev.message;
+      $("voiceStatus").classList.remove("hidden");
       break;
     case "token":
       if (ev.channel === "report") { handleReportToken(ev.text); break; }
@@ -157,14 +179,14 @@ function setMicUI(active) {
   const status = $("voiceStatus");
   if (active) {
     btn.classList.add("mic-active");
-    btn.textContent = "⏹";
-    btn.title = "正在聆听…点击停止并发送";
+    btn.textContent = "⏸";
+    btn.title = "暂停面试（停顿自动发送不受影响；已识别内容不会发出）";
     status.textContent = "🎧 正在聆听，说完停顿一下会自动发送…";
     status.classList.remove("hidden");
   } else {
     btn.classList.remove("mic-active");
     btn.textContent = "🎤";
-    btn.title = "点击说话（再次点击停止并发送）";
+    btn.title = "点击说话 / 继续面试";
     status.classList.add("hidden");
   }
 }
@@ -181,14 +203,23 @@ $("voiceModeToggle").addEventListener("change", async (e) => {
   localStorage.setItem("ie_voice_mode", voiceMode ? "1" : "0");
   if (voiceMode) {
     if (!cloudAvail) await detectCloudVoice(); // 初次探测失败时给第二次机会
+    const st = $("voiceStatus");
     if (cloudAvail && state.sessionId && !cloudVoice.connected) {
       try {
         await cloudVoice.connect(state.sessionId);
+        st.textContent = "☁️ 已连接云端语音（阿里 CosyVoice 男声 + paraformer 识别）";
+        st.classList.remove("hidden");
       } catch (err) {
         showToast("云端语音连接失败：" + (err.message || err) + "，回退浏览器原生语音");
       }
-    } else if (!cloudAvail && !voiceIn.supported) {
-      showToast("当前浏览器不支持语音识别，请使用 Chrome 或 Edge");
+    } else if (cloudAvail && cloudVoice.connected) {
+      st.textContent = "☁️ 云端语音运行中";
+      st.classList.remove("hidden");
+    } else if (!cloudAvail) {
+      // 本地兜底：明确告知体验差异，避免误以为在用云端
+      st.textContent = "⚠️ 未连接云端，当前是浏览器原生语音（音色生硬、识别差），请刷新页面重试";
+      st.classList.remove("hidden");
+      if (!voiceIn.supported) showToast("当前浏览器不支持语音识别，请使用 Chrome 或 Edge");
     }
   }
   if (!voiceMode) {
@@ -199,21 +230,13 @@ $("voiceModeToggle").addEventListener("change", async (e) => {
   }
 });
 
-// 麦克风按钮：云端模式=静音/恢复；浏览器模式=手动开/关（关闭时若已识别到内容则发送）
+// 麦克风按钮：云端模式=暂停/继续面试（停顿自动发送不受影响；暂停期间已识别内容不发送）；
+// 浏览器模式=手动开/关（手动停止只暂停不发送，内容留输入框待确认；静音超时仍自动发送）
 $("micBtn").addEventListener("click", () => {
   if (!micSupported) { showToast(MIC_BLOCK_TIP); return; }
   if (cloudActive()) {
-    const muted = cloudVoice.toggleMute();
-    const st = $("voiceStatus");
-    if (muted) {
-      setMicUI(false);
-      st.textContent = "🔇 已静音，点击麦克风恢复";
-      st.classList.remove("hidden");
-    } else {
-      setMicUI(true);
-      st.textContent = "🎧 聆听中，直接说话…";
-      st.classList.remove("hidden");
-    }
+    if (cloudVoice.paused) cloudVoice.resume();
+    else cloudVoice.pause();
     return;
   }
   if (!voiceIn.supported) {
@@ -223,7 +246,11 @@ $("micBtn").addEventListener("click", () => {
   if (voiceIn.listening) {
     const txt = voiceIn.finalText.trim() || $("userInput").value.trim();
     voiceIn.stop();
-    if (txt) { $("userInput").value = txt; sendMessage(); }
+    // 手动停止 = 暂停：识别内容保留在输入框，用户确认后手动发送，不再自动发出
+    if (txt) { $("userInput").value = txt; autoGrow(); }
+    const st = $("voiceStatus");
+    st.textContent = "⏸ 已暂停，内容在输入框中，确认后点发送；或再点麦克风重新说话";
+    st.classList.remove("hidden");
   } else {
     voiceOut.cancel(); // 说话前先停掉朗读，避免回声
     voiceIn.start();

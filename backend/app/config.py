@@ -39,7 +39,8 @@ class Settings:
     DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
     ALIYUN_ASR_MODEL: str = os.getenv("ALIYUN_ASR_MODEL", "paraformer-realtime-v2")
     ALIYUN_TTS_MODEL: str = os.getenv("ALIYUN_TTS_MODEL", "cosyvoice-v2")
-    ALIYUN_TTS_VOICE: str = os.getenv("ALIYUN_TTS_VOICE", "longxiaochun_v2")
+    # 默认男声「龙叔」（沉稳成熟，适合面试官）；可选：longcheng_v2 龙城 / longhua_v2 龙华
+    ALIYUN_TTS_VOICE: str = os.getenv("ALIYUN_TTS_VOICE", "longshu_v2")
 
     # 火山引擎（纯 WebSocket，无需额外 SDK）
     VOLC_APP_ID: str = os.getenv("VOLC_APP_ID", "")

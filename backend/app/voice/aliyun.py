@@ -26,6 +26,27 @@ def _import_dashscope():
         ) from e
 
 
+def _safe_err(obj) -> str:
+    """安全地格式化 SDK 错误对象。
+
+    dashscope 部分错误结果（如 RecognitionResult）的 __str__ 自身会抛
+    AttributeError；在 SDK 回调线程里直接 f-string 会炸掉接收线程，
+    导致 ASR 静默死亡（真实事故）。因此任何字符串化都必须兜底。
+    """
+    if obj is None:
+        return "unknown"
+    try:
+        msg = getattr(obj, "message", None)
+        if msg:
+            return str(msg)
+    except Exception:
+        pass
+    try:
+        return str(obj)
+    except Exception:
+        return f"<{type(obj).__name__}>"
+
+
 class AliyunASR:
     """paraformer 流式实时识别。SDK 为同步回调模型，事件经 loop.call_soon_threadsafe 桥回异步侧。"""
 
@@ -35,6 +56,8 @@ class AliyunASR:
         self._on_error = on_error
         self._rec = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._stopping = False   # 主动停止中：区分正常关闭与异常断连
+        self._dead = False       # 已上报过断连，避免重复
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -68,7 +91,18 @@ class AliyunASR:
                     outer._emit(outer._on_error, f"ASR 结果解析失败: {e}")
 
             def on_error(self, message=None, **_):
-                outer._emit(outer._on_error, f"阿里 ASR 错误: {message or 'unknown'}")
+                # 主动停止过程中的报错（如静音导致的 NO_VALID_AUDIO_ERROR）属预期，不上报
+                if not outer._stopping:
+                    outer._report_dead(f"阿里 ASR 错误: {_safe_err(message)}")
+
+            def on_close(self, *_, **__):
+                if not outer._stopping:
+                    outer._report_dead("阿里 ASR 连接被关闭")
+
+            def on_complete(self, *_, **__):
+                # 识别任务被服务端结束（时长上限/长时间静音等）
+                if not outer._stopping:
+                    outer._report_dead("阿里 ASR 任务已结束")
 
         def _start():
             rec = Recognition(
@@ -80,24 +114,34 @@ class AliyunASR:
             rec.start()
             return rec
 
-        self._rec = await asyncio.to_thread(_start)
+        # 有界等待：SDK 的 start 阻塞式等服务端 task-started，异常时可能长时间挂起
+        self._rec = await asyncio.wait_for(asyncio.to_thread(_start), timeout=10)
 
     def _emit(self, cb, *args):
         if self._loop and not self._loop.is_closed():
             self._loop.call_soon_threadsafe(cb, *args)
 
+    def _report_dead(self, reason: str):
+        """断连只上报一次（错误回调/关闭回调/发送失败可能同时触发）。"""
+        if not self._dead:
+            self._dead = True
+            self._emit(self._on_error, reason)
+
     def feed(self, pcm: bytes) -> None:
-        if self._rec is not None:
+        if self._rec is not None and not self._dead:
             try:
                 self._rec.send_audio_frame(pcm)
             except Exception:
-                pass  # 连接已断开等情况由 on_error 兜底
+                # 连接已断开：上报让管道层重连，而不是静默丢音频
+                self._report_dead("阿里 ASR 音频发送失败")
 
     async def stop(self) -> None:
+        self._stopping = True
         if self._rec is not None:
             rec, self._rec = self._rec, None
             try:
-                await asyncio.to_thread(rec.stop)
+                # 有界等待：SDK 的 stop 会等服务端收尾，连接异常时可能长时间阻塞
+                await asyncio.wait_for(asyncio.to_thread(rec.stop), timeout=5)
             except Exception:
                 pass
 
@@ -125,7 +169,7 @@ class AliyunTTS:
                 q.put(None)
 
             def on_error(self, message=None, **_):
-                q.put(Exception(f"阿里 TTS 错误: {message or 'unknown'}"))
+                q.put(Exception(f"阿里 TTS 错误: {_safe_err(message)}"))
 
         def _run():
             kwargs = dict(
