@@ -32,6 +32,25 @@ from .base import VoiceProvider, clean_for_tts, split_speakable
 
 log = logging.getLogger("interview_expert.voice")
 
+try:
+    import audioop  # Python <=3.12 可用（C 实现）
+
+    def _pcm_rms(data: bytes) -> float:
+        """PCM16 LE 的归一化 RMS 能量（0~1）。"""
+        if not data:
+            return 0.0
+        return audioop.rms(data, 2) / 32768.0
+except ImportError:  # Python 3.13+ 移除了 audioop，退化为纯 Python 计算
+    import array
+
+    def _pcm_rms(data: bytes) -> float:
+        n = len(data) - (len(data) % 2)
+        if n <= 0:
+            return 0.0
+        a = array.array("h")
+        a.frombytes(data[:n])
+        return (sum(x * x for x in a) / len(a)) ** 0.5 / 32768.0
+
 
 class VoiceSession:
     def __init__(self, ws, session: "sess.Session", provider: VoiceProvider):
@@ -54,6 +73,13 @@ class VoiceSession:
         self._asr_warned = False
         self._asr_last_restart = 0.0
         self._audio_backlog = bytearray()
+        # 用户主动暂停：冻结面试（不识别、不自动回复、停播 TTS）
+        self.paused = False
+        # 能量看门狗：不依赖任何 ASR 事件，直接对上行 PCM 算能量——
+        # ASR 无论是报错死亡还是静默死亡（僵尸实例），用户一开口就能自愈
+        self._speech_since: Optional[float] = None
+        self._last_asr_event_at: float = time.monotonic()
+        self._energy_restarted_at: float = 0.0
 
     # ---------- ASR 生命周期 ----------
     def _make_asr(self):
@@ -180,13 +206,16 @@ class VoiceSession:
                     break
                 data = msg.get("bytes")
                 if data is not None:
+                    if self.paused:
+                        continue  # 暂停期间忽略上行音频（面试冻结）
+                    self._track_energy(_pcm_rms(data))
                     if self._asr_ready:
                         self.asr.feed(data)  # 协议要求 feed 线程安全
                     else:
-                        # ASR 重连间隙：缓存最近约 2 秒音频，恢复后回灌，避免漏掉用户开头
+                        # ASR 重连间隙：缓存最近约 4 秒音频，恢复后回灌，避免漏掉用户开头
                         self._audio_backlog.extend(data)
-                        if len(self._audio_backlog) > 64000:
-                            del self._audio_backlog[:len(self._audio_backlog) - 64000]
+                        if len(self._audio_backlog) > 128000:
+                            del self._audio_backlog[:len(self._audio_backlog) - 128000]
                     continue
                 text = msg.get("text")
                 if text:
@@ -203,6 +232,48 @@ class VoiceSession:
         if self.loop and not self.loop.is_closed() and not self.closed:
             self.loop.call_soon_threadsafe(self.inbox.put_nowait, item)
 
+    # ---------- 能量看门狗 ----------
+    SPEECH_RMS = 0.035             # 持续人声能量阈值（浏览器 AGC 下环境噪音/键盘声一般低于此）
+    ENERGY_RECONNECT_AFTER = 0.4   # ASR 未就绪：人声持续 0.4s 即触发重连
+    ZOMBIE_DETECT_AFTER = 3.0      # ASR 就绪但持续人声 3s 零识别事件 → 判定僵尸实例
+    ENERGY_RESTART_COOLDOWN = 5.0  # 能量触发重启的冷却，避免抖动链
+
+    def _track_energy(self, rms: float) -> None:
+        """根据上行音频能量驱动 ASR 自愈（在 _recv_loop 中调用，可创建异步任务）。"""
+        now = time.monotonic()
+        if rms < self.SPEECH_RMS:
+            self._speech_since = None
+            return
+        if self._speech_since is None:
+            self._speech_since = now
+            return
+        dur = now - self._speech_since
+        if now - self._energy_restarted_at < self.ENERGY_RESTART_COOLDOWN:
+            return
+        if not self._asr_ready and not self._asr_starting and dur >= self.ENERGY_RECONNECT_AFTER:
+            # ASR 挂了（错误事件可能丢失/被吞），但用户已在说话：立即重连，backlog 兜住开头
+            self._energy_restarted_at = now
+            log.warning("ASR 未就绪但检测到持续人声（%.1fs），能量触发重连", dur)
+            asyncio.create_task(self._ensure_asr())
+        elif (self._asr_ready and dur >= self.ZOMBIE_DETECT_AFTER
+              and now - self._last_asr_event_at >= self.ZOMBIE_DETECT_AFTER):
+            # 僵尸实例：持续人声 3s 无任何 partial/final —— 实例已静默死亡
+            self._energy_restarted_at = now
+            self._speech_since = None
+            log.warning("ASR 持续人声 %.1fs 无任何识别事件，判定僵尸实例，强制重启", dur)
+            self._asr_ready = False
+            old, self.asr = self.asr, None
+            if old is not None:
+                asyncio.create_task(self._stop_instance(old))  # 尽力回收，不阻塞重连
+            asyncio.create_task(self._ensure_asr())
+
+    @staticmethod
+    async def _stop_instance(inst) -> None:
+        try:
+            await inst.stop()
+        except Exception:
+            pass
+
     # ---------- 协调器 ----------
     # 面试官说话期间，ASR 定稿短于该长度视为咳嗽/回声误识别：不打断、不上屏
     ASR_BARGE_MIN_CHARS = 3
@@ -213,9 +284,16 @@ class VoiceSession:
             inst, val = payload if kind.startswith("asr_") else (None, payload)
             if kind.startswith("asr_") and inst is not self.asr:
                 continue  # 旧 ASR 实例的迟到事件，丢弃
+            if kind.startswith("asr_"):
+                self._last_asr_event_at = time.monotonic()
             if kind == "asr_partial":
+                if self.paused:
+                    continue  # 暂停中：不上屏
                 await self._send({"type": "asr_partial", "text": val})
             elif kind == "asr_final":
+                if self.paused:
+                    log.info("paused: drop asr_final %r", val)
+                    continue  # 暂停中：已识别内容不自动发送
                 if (self.turn_task and not self.turn_task.done()
                         and len(val.strip()) < self.ASR_BARGE_MIN_CHARS):
                     log.info("drop short asr_final during turn: %r", val)
@@ -244,6 +322,22 @@ class VoiceSession:
                     if not self._asr_ready:
                         asyncio.create_task(self._ensure_asr())
                     await self._interrupt()
+                elif t == "pause":
+                    # 暂停面试：冻结一切——打断进行中的轮次（停 LLM/TTS），
+                    # 已识别未发送的内容直接丢弃（见上方 paused 过滤）
+                    self.paused = True
+                    self._speech_since = None
+                    self._audio_backlog.clear()
+                    if self.turn_task and not self.turn_task.done():
+                        await self._interrupt()
+                    await self._send({"type": "paused"})
+                elif t == "resume":
+                    # 继续面试：恢复聆听；ASR 若不在位立即拉起
+                    self.paused = False
+                    self._speech_since = None
+                    await self._send({"type": "resumed"})
+                    if not self._asr_ready:
+                        asyncio.create_task(self._ensure_asr())
                 elif t == "text":
                     text = (payload.get("text") or "").strip()
                     if text:

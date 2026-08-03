@@ -10,6 +10,7 @@ class CloudVoiceClient {
     this.connected = false;
     this._connecting = null;    // 进行中的 connect Promise（防重入）
     this.muted = false;
+    this.paused = false;        // 用户主动暂停：面试冻结（不识别、不自动回复、停播 TTS）
 
     this.capCtx = null;         // 采集 AudioContext（16k）
     this.playCtx = null;        // 播放 AudioContext（设备默认率，自动重采样）
@@ -183,8 +184,29 @@ class CloudVoiceClient {
     return this.muted;
   }
 
+  // 暂停面试：停麦 + 停播面试官声音 + 通知服务端冻结（已识别内容不发送、打断进行中轮次）
+  pause() {
+    if (!this.connected || this.paused) return;
+    this.paused = true;
+    this.muted = true;
+    this._loudFrames = 0;
+    this.stopPlayback();           // 本地立即静音（不等服务端回包）
+    this.send({ type: "pause" });
+    this._setState("paused");
+  }
+
+  // 继续面试：恢复聆听
+  resume() {
+    if (!this.connected || !this.paused) return;
+    this.paused = false;
+    this.muted = false;
+    this.send({ type: "resume" });
+    this._setState("listening");
+  }
+
   _teardown() {
     this.connected = false;
+    this.paused = false;
     this.stopPlayback();
     if (this.workletNode) { try { this.workletNode.disconnect(); } catch (_) {} this.workletNode = null; }
     if (this.stream) { this.stream.getTracks().forEach((t) => t.stop()); this.stream = null; }

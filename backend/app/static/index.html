@@ -25,19 +25,21 @@
   <!-- ============ 启动面板 ============ -->
   <div id="setup" class="h-screen overflow-y-auto flex items-start md:items-center justify-center p-4 md:p-6">
     <div class="w-full max-w-3xl my-8 bg-ink-800/80 backdrop-blur rounded-2xl shadow-2xl border border-white/5 p-6 md:p-8 card-hover">
-      <div class="flex items-start justify-between gap-3 mb-1">
-        <div class="flex items-center gap-3">
-          <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-brand-500 to-indigo-400 flex items-center justify-center text-2xl">🎯</div>
-          <div>
+      <div class="flex flex-col md:flex-row items-start md:justify-between gap-3 mb-1">
+        <div class="flex items-center gap-3 min-w-0 w-full md:w-auto md:flex-1">
+          <div class="w-11 h-11 shrink-0 rounded-xl bg-gradient-to-br from-brand-500 to-indigo-400 flex items-center justify-center text-2xl">🎯</div>
+          <div class="min-w-0">
             <h1 class="text-2xl font-bold tracking-tight">AI 模拟面试 · 算法岗</h1>
             <p class="text-slate-400 text-sm">上传简历与 JD，随机匹配领域专家面试官，全真四环节模拟</p>
           </div>
         </div>
-        <div id="tierToggle" role="group" aria-label="版本切换" class="shrink-0 flex items-center gap-0.5 text-xs rounded-lg border border-white/10 p-0.5 bg-ink-900/40">
-          <button type="button" data-tier="normal" class="tier-opt px-2.5 py-1 rounded-md transition font-medium">普通</button>
-          <button type="button" data-tier="pro" class="tier-opt px-2.5 py-1 rounded-md transition font-medium">⭐ Pro</button>
+        <div class="flex items-center gap-2 shrink-0 self-end md:self-auto">
+          <div id="tierToggle" role="group" aria-label="版本切换" class="shrink-0 flex items-center gap-0.5 text-xs rounded-lg border border-white/10 p-0.5 bg-ink-900/40">
+            <button type="button" data-tier="normal" class="tier-opt px-2.5 py-1 rounded-md transition font-medium">普通</button>
+            <button type="button" data-tier="pro" class="tier-opt px-2.5 py-1 rounded-md transition font-medium">⭐ Pro</button>
+          </div>
+          <div id="setupUserChip" class="hidden shrink-0 max-w-[12rem] truncate text-xs text-slate-300 px-2.5 py-1 rounded-lg border border-white/10 bg-ink-900/40 cursor-pointer hover:border-brand-500 transition">游客</div>
         </div>
-        <div id="setupUserChip" class="hidden shrink-0 text-xs text-slate-300 px-2.5 py-1 rounded-lg border border-white/10 bg-ink-900/40 cursor-pointer hover:border-brand-500 transition">游客</div>
       </div>
 
       <!-- 模式选择：完整面试 / 定向练习 -->
@@ -152,7 +154,7 @@
         <button id="historyBtn" class="text-xs text-slate-300 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">📚 历史</button>
         <label id="voiceModeLabel" class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none px-2.5 py-1.5 rounded-lg border border-white/10 hover:border-brand-500 transition" title="开启后：面试官自动朗读，读完自动开麦听你回答，静音自动发送">
           <input type="checkbox" id="voiceModeToggle" class="accent-brand-500" />
-          <span>🎙️ <span class="hidden sm:inline">语音模式</span></span>
+          <span>🎙️ <span class="hidden sm:inline">语音模式</span><span id="voiceEngineTag" class="hidden ml-1 px-1 rounded text-[10px]"></span></span>
         </label>
         <button id="restartBtn" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border border-white/10">重新开始</button>
       </div>
